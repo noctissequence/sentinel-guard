@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # sentinel.sh — SENTINEL GUARD v3.0 PHOENIX (SUPER-HEALER)
-# PERSONAL PRODUCTION (VPS VPS, post-incident 2026-08-06)
+# PERSONAL PRODUCTION (PRODUCTION VPS, post-incident 2026-08-06)
 #
 # Guards:
 #   1. systemd units (restart if dead, crash-loop detect)
@@ -21,7 +21,7 @@
 #   M. CONFIG WATCH    — config.yaml/.env/SOUL.md; hilang/korup -> restore,
 #                        hash mismatch -> alert + backup .changed
 #   N. SECRET VAULT    — backup credential di-encrypt AES-256 (openssl)
-#   O. LIFE-LOOP       — heartbeat Primary Hermes <-> Secondary Hermes; saling bangunin
+#   O. LIFE-LOOP       — heartbeat Yerin <-> Merlin; saling bangunin
 #   P. CRON SELF-REGISTER — cron hilang -> daftar ulang sendiri
 #
 # Mode: silent saat sehat. ALERT + LOCKDOWN + HEAL saat ada anomali.
@@ -124,7 +124,7 @@ self_integrity() {
 # ============================================================
 # PILAR M — CONFIG WATCH: hermes config/.env/SOUL.md anti-tamper
 # Mode cerdas: file HILANG/KOSONG/INVALID -> restore paksa (pasti masalah).
-# Hash mismatch wajar (owner sengaja ganti) -> alert saja + backup .changed.
+# Hash mismatch wajar (Owner sengaja ganti) -> alert saja + backup .changed.
 # ============================================================
 check_config_file() {
     local file="$1" hash_file="$2" backup="$3" label="$4" min_size="${5:-100}"
@@ -221,7 +221,7 @@ secret_vault() {
 }
 
 # ============================================================
-# PILAR O — LIFE-LOOP: heartbeat Primary Hermes <-> Secondary Hermes (secondary)
+# PILAR O — LIFE-LOOP: heartbeat Yerin <-> Merlin (secondary)
 # Saling monitor: salah satu mati, yang lain bangunin.
 # ============================================================
 life_loop() {
@@ -231,8 +231,8 @@ life_loop() {
         date -u +%s > "$hb_dir/hermes-1.heartbeat" 2>/dev/null
         chmod 644 "$hb_dir/hermes-1.heartbeat" 2>/dev/null
     else
-        date -u +%s > "$hb_dir/secondary.heartbeat" 2>/dev/null
-        chmod 644 "$hb_dir/secondary.heartbeat" 2>/dev/null
+        date -u +%s > "$hb_dir/hermes-2.heartbeat" 2>/dev/null
+        chmod 644 "$hb_dir/hermes-2.heartbeat" 2>/dev/null
     fi
 
     if [ "${LIFE_LOOP:-on}" = "on" ]; then
@@ -250,10 +250,10 @@ life_loop() {
                     echo "$NOW" > "$alert_file"
                     send_alert "🛡️ LIFE-LOOP: $partner HEARTBEAT STALE (${age}s). Recovery attempted."
                     # Recovery: restart partner gateway
-                    if [ "$partner" = "hermes-2" ] && [ -x /root/.hermes/scripts/restart-secondary.sh ]; then
-                        /root/.hermes/scripts/restart-secondary.sh >/dev/null 2>&1 &
-                    elif [ -x /root/.hermes/scripts/secondary_worker.sh ]; then
-                        /root/.hermes/scripts/secondary_worker.sh >/dev/null 2>&1 &
+                    if [ "$partner" = "hermes-2" ] && [ -x /root/.hermes/scripts/restart-hermes-2.sh ]; then
+                        /root/.hermes/scripts/restart-hermes-2.sh >/dev/null 2>&1 &
+                    elif [ -x /root/.hermes/scripts/hermes-2_worker.sh ]; then
+                        /root/.hermes/scripts/hermes-2_worker.sh >/dev/null 2>&1 &
                     fi
                     echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') life-loop: $partner stale ${age}s, recovery attempted" >> "$LOG_FILE" 2>/dev/null
                 fi
@@ -676,7 +676,7 @@ if [ "${HTTP_WATCH:-off}" = "on" ]; then
             RESTART_HOOK=""
             case "$svc_name" in
                 webapp1)  RESTART_HOOK="${FLUXSCOUT_RESTART_CMD:-}" ;;
-                webapp) RESTART_HOOK="${WEBAPP_RESTART_CMD:-}" ;;
+                sequenceverse) RESTART_HOOK="${SEQUENCEVERSE_RESTART_CMD:-}" ;;
                 webapp2)      RESTART_HOOK="${WALL3_RESTART_CMD:-}" ;;
             esac
             if [ -n "$RESTART_HOOK" ]; then
@@ -698,8 +698,8 @@ fi
 # ============================================================
 # PILAR R — CORE VAULT: auto-backup ke core tiap run
 # (Pilar N upgraded: selain vault/, tiap tick backup kritis
-#  di-encrypt ke core vault — write path tanpa kode owner.
-#  Restore/decrypt core butuh access code owner.)
+#  di-encrypt ke core vault — write path tanpa kode Owner.
+#  Restore/decrypt core butuh access code Owner.)
 # ============================================================
 core_vault_backup() {
     local cv="/root/.hermes/scripts/core-vault.sh"
@@ -745,7 +745,7 @@ auto_sync_backups() {
 # ============================================================
 github_repo_monitor() {
     [ "${GITHUB_WATCH:-on}" != "on" ] && return 0
-    local repos="${GITHUB_REPOS:-vpssequence/sentinel-guard}"
+    local repos="${GITHUB_REPOS:-github-owner/sentinel-guard}"
     local state="$STATE_DIR/github_state"
     mkdir -p "$state" 2>/dev/null
     for repo in $repos; do
@@ -760,9 +760,9 @@ github_repo_monitor() {
         [ -f "$state/$repo.sha" ] && prev=$(cat "$state/$repo.sha" 2>/dev/null)
         if [ -n "$sha" ] && [ "$sha" != "$prev" ]; then
             # Commit BARU — cek author
-            if [ -n "$author" ] && [ "$author" != "${GITHUB_OWNER:-vpssequence}" ]; then
+            if [ -n "$author" ] && [ "$author" != "${GITHUB_OWNER:-github-owner}" ]; then
                 PROBLEMS="${PROBLEMS}🚨 GITHUB: $repo commit BARU oleh ${author:-unknown}! msg: ${msg:-?}\n"
-            elif [ -n "$author" ] && [ "$author" = "${GITHUB_OWNER:-vpssequence}" ]; then
+            elif [ -n "$author" ] && [ "$author" = "${GITHUB_OWNER:-github-owner}" ]; then
                 log "github-monitor: $repo commit oleh owner ($sha)"
             fi
             echo "$sha" > "$state/$repo.sha"
