@@ -252,8 +252,8 @@ life_loop() {
                     # Recovery: restart partner gateway
                     if [ "$partner" = "hermes-2" ] && [ -x /root/.hermes/scripts/restart-secondary.sh ]; then
                         /root/.hermes/scripts/restart-secondary.sh >/dev/null 2>&1 &
-                    elif [ -x /root/.hermes/scripts/secondary_worker.sh ]; then
-                        /root/.hermes/scripts/secondary_worker.sh >/dev/null 2>&1 &
+                    elif [ -x /root/.hermes/scripts/hermes-2_worker.sh ]; then
+                        /root/.hermes/scripts/hermes-2_worker.sh >/dev/null 2>&1 &
                     fi
                     echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') life-loop: $partner stale ${age}s, recovery attempted" >> "$LOG_FILE" 2>/dev/null
                 fi
@@ -467,10 +467,20 @@ if [ "${CRON_WATCH:-on}" = "on" ]; then
     CRON_SNAP=$( (crontab -l 2>/dev/null; cat /etc/cron.d/* 2>/dev/null | grep -v '^#' | grep -v '^$'; ls /etc/cron.d/ 2>/dev/null) | md5sum | awk '{print $1}' )
     CRON_PREV=$(cat "$STATE_DIR/cron.hash" 2>/dev/null || echo "")
     if [ -n "$CRON_PREV" ] && [ "$CRON_SNAP" != "$CRON_PREV" ]; then
-        PROBLEMS="${PROBLEMS}🚨 CRON berubah! (crontab / etc/cron.d)\\n"
+        PROBLEMS="${PROBLEMS}🚨 CRON berubah! (crontab / etc/cron.d)\\\\n"
         PORT_LOCKDOWN=true
+        # AUTO-REVERT: kembalikan crontab ke baseline (hapus cron asing)
+        if [ "${AUTO_REVERT_CRON:-on}" = "on" ] && [ -f "$STATE_DIR/cron.baseline" ]; then
+            cat "$STATE_DIR/cron.baseline" | crontab - 2>/dev/null && \
+                PROBLEMS="${PROBLEMS}🛡️ crontab AUTO-REVERTED ke baseline\\\\n"
+        fi
     fi
     echo "$CRON_SNAP" > "$STATE_DIR/cron.hash"
+    # Simpan baseline pertama (hanya kalau belum ada)
+    if [ ! -f "$STATE_DIR/cron.baseline" ]; then
+        crontab -l 2>/dev/null > "$STATE_DIR/cron.baseline"
+        echo "cron baseline saved: $(wc -l < "$STATE_DIR/cron.baseline") lines"
+    fi
 
     USER_SNAP=$(awk -F: '$3>=1000 || $3==0 {print $1":"$3}' /etc/passwd 2>/dev/null | md5sum | awk '{print $1}')
     USER_PREV=$(cat "$STATE_DIR/users.hash" 2>/dev/null || echo "")
@@ -676,7 +686,7 @@ if [ "${HTTP_WATCH:-off}" = "on" ]; then
             RESTART_HOOK=""
             case "$svc_name" in
                 webapp1)  RESTART_HOOK="${FLUXSCOUT_RESTART_CMD:-}" ;;
-                webapp) RESTART_HOOK="${WEBAPP_RESTART_CMD:-}" ;;
+                webapp) RESTART_HOOK="${SEQUENCEVERSE_RESTART_CMD:-}" ;;
                 webapp2)      RESTART_HOOK="${WALL3_RESTART_CMD:-}" ;;
             esac
             if [ -n "$RESTART_HOOK" ]; then
@@ -749,12 +759,12 @@ github_repo_monitor() {
     local state="$STATE_DIR/github_state"
     mkdir -p "$state" 2>/dev/null
     for repo in $repos; do
-        local api="https://api.github.com/repos/$repo/commits?per_page=1"
+        local api="https://github.com/$repo/commits/main.atom"
         local info sha author msg
-        info=$(curl -s --max-time 10 "$api" 2>/dev/null | head -c 2000)
-        sha=$(echo "$info" | grep -m1 '"sha"' | sed 's/.*: "\([a-f0-9]*\)".*/\1/' 2>/dev/null)
-        author=$(echo "$info" | grep -m1 '"login"' | sed 's/.*: "\([^"]*\)".*/\1/' 2>/dev/null)
-        msg=$(echo "$info" | grep -m1 '"message"' | sed 's/.*: "\([^"]*\)".*/\1/' 2>/dev/null | head -c 100)
+        info=$(curl -sL --max-time 10 -H "User-Agent: sentinel-guard" "$api" 2>/dev/null | head -c 4000)
+        sha=$(echo "$info" | grep -m1 'Grit::Commit/' | sed 's/.*Grit::Commit\/\([a-f0-9]\{40\}\).*/\1/' 2>/dev/null)
+        author=$(echo "$info" | grep -m2 '<name>' | tail -1 | sed 's/<[^>]*>//g' | tr -d ' \n' 2>/dev/null)
+        msg=$(echo "$info" | grep -m1 '<title>' | sed 's/<[^>]*>//g' | head -c 100)
         local prev=""
         mkdir -p "$state/$(dirname "$repo")" 2>/dev/null
         [ -f "$state/$repo.sha" ] && prev=$(cat "$state/$repo.sha" 2>/dev/null)
@@ -802,7 +812,7 @@ if [ -n "$PROBLEMS" ]; then
     fi
 
     if [ "$SHOULD_SEND" = "true" ]; then
-        MSG="🛰️ SENTINEL ALERT (v2.0 HARDENED)
+        MSG="🛰️ SENTINEL ALERT (v3.0 PHOENIX)
 $(echo -e "$PROBLEMS")"
         send_alert "$MSG"
         echo "$ALERT_HASH" > "$LAST_FILE"
