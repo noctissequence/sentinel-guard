@@ -1,6 +1,6 @@
 #!/bin/bash
 # ============================================================
-# sentinel.sh — SECOND-LINE DEFENSE v2.0 (HARDENED)
+# sentinel.sh — SENTINEL GUARD v3.0 PHOENIX (SUPER-HEALER)
 # PERSONAL PRODUCTION (PRODUCTION VPS, post-incident 2026-08-06)
 #
 # Guards:
@@ -16,8 +16,15 @@
 #   7. NEW: FILE INTEGRITY — tripwire hash file kritis
 #   8. NEW: AUTO-LOCKDOWN — kalau terdeteksi intrusi, langsung
 #      blokir semua port masuk kecuali whitelist + kill proses
+#   v3.0 PHOENIX (SUPER-HEALER):
+#   L. SELF-INTEGRITY  — script sendiri di-hash; diubah/dihapus -> restore
+#   M. CONFIG WATCH    — config.yaml/.env/SOUL.md; hilang/korup -> restore,
+#                        hash mismatch -> alert + backup .changed
+#   N. SECRET VAULT    — backup credential di-encrypt AES-256 (openssl)
+#   O. LIFE-LOOP       — heartbeat Yerin <-> Merlin; saling bangunin
+#   P. CRON SELF-REGISTER — cron hilang -> daftar ulang sendiri
 #
-# Mode: silent saat sehat. ALERT + LOCKDOWN saat ada anomali.
+# Mode: silent saat sehat. ALERT + LOCKDOWN + HEAL saat ada anomali.
 # Config: /etc/sentinel-guard/config.env
 # ============================================================
 
@@ -46,6 +53,14 @@ STATE_DIR="${SENTINEL_STATE_DIR:-/tmp/hermes-sentinel}"
 mkdir -p "$STATE_DIR"
 LOG_FILE="${SENTINEL_LOG_FILE:-/var/log/sentinel-guard.log}"
 
+# --- v3.0 PHOENIX dirs ---
+SENTINEL_DIR="/etc/sentinel-guard"
+BACKUP_DIR="$SENTINEL_DIR/backups"
+HASH_DIR="$SENTINEL_DIR/hashes"
+VAULT_DIR="$SENTINEL_DIR/vault"
+mkdir -p "$BACKUP_DIR" "$HASH_DIR" "$VAULT_DIR" 2>/dev/null
+chmod 700 "$SENTINEL_DIR" "$BACKUP_DIR" "$HASH_DIR" "$VAULT_DIR" 2>/dev/null
+
 for _var in CRASH_THRESHOLD CRASH_WINDOW_SEC CASCADE_THRESHOLD; do
     _val="${!_var:-}"
     if ! [[ "$_val" =~ ^[0-9]+$ ]]; then
@@ -71,6 +86,197 @@ send_alert() {
         -d text="$1" \
         --max-time 10 > /dev/null 2>&1; then
         echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') sentinel: ALERT SEND FAILED: $1" >> "$LOG_FILE" 2>/dev/null
+    fi
+}
+
+log() { echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') $*" >> "$LOG_FILE" 2>/dev/null; }
+
+# ============================================================
+# PILAR L — SELF-INTEGRITY: sentinel script sendiri anti-tamper
+# Script di-hash baseline; diubah/dihapus -> restore dari backup.
+# ============================================================
+self_integrity() {
+    local script="/usr/local/bin/sentinel-guard.sh"
+    local hash_file="$HASH_DIR/sentinel.sha256"
+    [ -f "$script" ] || {
+        send_alert "🛡️ CRITICAL: sentinel-guard.sh HILANG! Restoring...";
+        cp -f "$BACKUP_DIR/sentinel-guard.sh.bak" "$script" 2>/dev/null;
+        chmod +x "$script" 2>/dev/null;
+        echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') sentinel restored (was missing)" >> "$LOG_FILE" 2>/dev/null;
+        return;
+    }
+    [ -f "$hash_file" ] || {
+        sha256sum "$script" | awk '{print $1}' > "$hash_file";
+        return;
+    }
+    local current expected
+    current=$(sha256sum "$script" | awk '{print $1}')
+    expected=$(awk '{print $1}' "$hash_file" 2>/dev/null)
+    if [ -n "$expected" ] && [ "$current" != "$expected" ]; then
+        send_alert "🛡️ WARNING: sentinel-guard.sh DIUBAH! Hash mismatch. Restoring from backup..."
+        cp -f "$BACKUP_DIR/sentinel-guard.sh.bak" "$script" 2>/dev/null
+        chmod +x "$script" 2>/dev/null
+        sha256sum "$script" | awk '{print $1}' > "$hash_file"
+        echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') sentinel self-heal (hash mismatch)" >> "$LOG_FILE" 2>/dev/null
+    fi
+}
+
+# ============================================================
+# PILAR M — CONFIG WATCH: hermes config/.env/SOUL.md anti-tamper
+# Mode cerdas: file HILANG/KOSONG/INVALID -> restore paksa (pasti masalah).
+# Hash mismatch wajar (Owner sengaja ganti) -> alert saja + backup .changed.
+# ============================================================
+check_config_file() {
+    local file="$1" hash_file="$2" backup="$3" label="$4" min_size="${5:-100}"
+    [ -f "$file" ] || {
+        send_alert "🛡️ CRITICAL: $label HILANG! Restoring from backup..."
+        cp -f "$backup" "$file" 2>/dev/null
+        chmod 600 "$file" 2>/dev/null
+        echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') $label restored (missing)" >> "$LOG_FILE" 2>/dev/null
+        return
+    }
+    local size
+    size=$(stat -c '%s' "$file" 2>/dev/null || echo 0)
+    if [ "$size" -lt "$min_size" ]; then
+        send_alert "🛡️ CRITICAL: $label KORUP (${size}B < ${min_size}B)! Restoring backup..."
+        cp -f "$backup" "$file" 2>/dev/null
+        chmod 600 "$file" 2>/dev/null
+        echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') $label restored (corrupt ${size}B)" >> "$LOG_FILE" 2>/dev/null
+        return
+    fi
+    if [ "$label" = "hermes .env" ]; then
+        if ! grep -qE '(DEEPSEEK_API_KEY|OPENROUTER_API_KEY|TELEGRAM_BOT_TOKEN)=' "$file" 2>/dev/null; then
+            send_alert "🛡️ CRITICAL: .env KEHILANGAN SEMUA TOKEN! Restoring backup (anti-revoke recovery)..."
+            cp -f "$backup" "$file" 2>/dev/null
+            chmod 600 "$file" 2>/dev/null
+            echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') .env restored (no valid tokens)" >> "$LOG_FILE" 2>/dev/null
+            return
+        fi
+    fi
+    [ -f "$hash_file" ] || {
+        sha256sum "$file" | awk '{print $1}' > "$hash_file"
+        return
+    }
+    local current expected
+    current=$(sha256sum "$file" | awk '{print $1}')
+    expected=$(awk '{print $1}' "$hash_file" 2>/dev/null)
+    if [ -n "$expected" ] && [ "$current" != "$expected" ]; then
+        cp -f "$file" "$BACKUP_DIR/$(basename "$file").changed.$(date +%s)" 2>/dev/null
+        send_alert "🛡️ WARNING: $label DIUBAH (hash mismatch). Versi baru di-backup sebagai .changed. Not auto-restored — jika perubahan disengaja, update baseline: sha256sum $file"
+        echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') $label changed (hash mismatch)" >> "$LOG_FILE" 2>/dev/null
+    fi
+}
+
+config_watch() {
+    check_config_file "/root/.hermes/config.yaml" "$HASH_DIR/hermes-config.sha256" "$BACKUP_DIR/hermes-config.yaml.bak" "hermes config.yaml" 200
+    check_config_file "/root/.hermes/.env" "$HASH_DIR/hermes-env.sha256" "$BACKUP_DIR/hermes-env.bak" "hermes .env" 500
+    check_config_file "/root/.hermes/SOUL.md" "$HASH_DIR/soul.sha256" "$BACKUP_DIR/soul.md.bak" "SOUL.md" 100
+}
+
+# ============================================================
+# PILAR N — SECRET VAULT: backup credential di-encrypt AES-256
+# Defense-in-depth: walau attacker dapet backup/ dir, isi tetap
+# tidak terbaca tanpa master key (di vault/, mode 600).
+# ============================================================
+MASTER_KEY_FILE="$VAULT_DIR/master.key"
+
+vault_encrypt() {
+    local src="$1" name="$2"
+    [ -f "$MASTER_KEY_FILE" ] || return 1
+    [ -f "$src" ] || return 1
+    openssl enc -aes-256-cbc -salt -pbkdf2 -iter 10000 \
+        -in "$src" -out "$VAULT_DIR/$name.enc" \
+        -pass file:"$MASTER_KEY_FILE" 2>/dev/null
+    chmod 600 "$VAULT_DIR/$name.enc" 2>/dev/null
+}
+
+vault_decrypt() {
+    local name="$1" dst="$2"
+    [ -f "$MASTER_KEY_FILE" ] || return 1
+    [ -f "$VAULT_DIR/$name.enc" ] || return 1
+    openssl enc -d -aes-256-cbc -pbkdf2 -iter 10000 \
+        -in "$VAULT_DIR/$name.enc" -out "$dst" \
+        -pass file:"$MASTER_KEY_FILE" 2>/dev/null
+}
+
+secret_vault() {
+    if [ ! -f "$MASTER_KEY_FILE" ]; then
+        openssl rand -hex 32 > "$MASTER_KEY_FILE" 2>/dev/null
+        chmod 600 "$MASTER_KEY_FILE" 2>/dev/null
+    fi
+    vault_encrypt "$BACKUP_DIR/hermes-env.bak" "env"
+    vault_encrypt "$BACKUP_DIR/hermes-config.yaml.bak" "config"
+    vault_encrypt "$BACKUP_DIR/soul.md.bak" "soul"
+    vault_encrypt "/etc/sentinel-guard/config.env" "sentinel-config"
+    if [ -f "$VAULT_DIR/env.enc" ]; then
+        local tmp
+        tmp=$(mktemp)
+        if vault_decrypt "env" "$tmp" && [ -s "$tmp" ]; then
+            : # OK
+        else
+            send_alert "🛡️ CRITICAL: Secret vault decrypt GAGAL! Master key corrupted?"
+        fi
+        rm -f "$tmp"
+    fi
+}
+
+# ============================================================
+# PILAR O — LIFE-LOOP: heartbeat Yerin <-> Merlin (secondary)
+# Saling monitor: salah satu mati, yang lain bangunin.
+# ============================================================
+life_loop() {
+    local hb_dir="/root/hermes-shared/heartbeat"
+    mkdir -p "$hb_dir" 2>/dev/null
+    if [ "${SENTINEL_IDENTITY:-hermes-1}" = "hermes-1" ]; then
+        date -u +%s > "$hb_dir/hermes-1.heartbeat" 2>/dev/null
+        chmod 644 "$hb_dir/hermes-1.heartbeat" 2>/dev/null
+    else
+        date -u +%s > "$hb_dir/hermes-2.heartbeat" 2>/dev/null
+        chmod 644 "$hb_dir/hermes-2.heartbeat" 2>/dev/null
+    fi
+
+    if [ "${LIFE_LOOP:-on}" = "on" ]; then
+        local partner="${LIFE_LOOP_PARTNER:-hermes-2}"
+        local hb_file="$hb_dir/$partner.heartbeat"
+        local max_age="${LIFE_LOOP_MAX_AGE:-300}"
+        local alert_file="$STATE_DIR/life-loop.$partner"
+        if [ -f "$hb_file" ]; then
+            local hb_ts age last_alert=0
+            hb_ts=$(cat "$hb_file" 2>/dev/null || echo 0)
+            age=$((NOW - hb_ts))
+            if [ "$age" -gt "$max_age" ]; then
+                [ -f "$alert_file" ] && last_alert=$(cat "$alert_file" 2>/dev/null || echo 0)
+                if [ $((NOW - last_alert)) -gt 900 ]; then
+                    echo "$NOW" > "$alert_file"
+                    send_alert "🛡️ LIFE-LOOP: $partner HEARTBEAT STALE (${age}s). Recovery attempted."
+                    # Recovery: restart partner gateway
+                    if [ "$partner" = "hermes-2" ] && [ -x /root/.hermes/scripts/restart-hermes-2.sh ]; then
+                        /root/.hermes/scripts/restart-hermes-2.sh >/dev/null 2>&1 &
+                    elif [ -x /root/.hermes/scripts/hermes-2_worker.sh ]; then
+                        /root/.hermes/scripts/hermes-2_worker.sh >/dev/null 2>&1 &
+                    fi
+                    echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') life-loop: $partner stale ${age}s, recovery attempted" >> "$LOG_FILE" 2>/dev/null
+                fi
+            fi
+        fi
+    fi
+}
+
+# ============================================================
+# PILAR P — CRON SELF-REGISTER: cron sentinel hilang -> daftar ulang
+# ============================================================
+cron_self_register() {
+    local jobs_file="${HERMES_HOME:-/root/.hermes}/cron/jobs.json"
+    [ -f "$jobs_file" ] || return 0
+    if ! grep -q "sentinel-guard" "$jobs_file" 2>/dev/null; then
+        send_alert "🛡️ WARNING: sentinel-guard cron HILANG dari jobs! Re-registering..."
+        HERMES_HOME="${HERMES_HOME:-/root/.hermes}" \
+        /usr/local/lib/hermes-agent/venv/bin/python -m hermes_cli.main cron create \
+            --name "sentinel-guard" \
+            --schedule "*/2 * * * *" \
+            --script sentinel-guard.sh \
+            --no-agent >/dev/null 2>&1 || true
+        echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') sentinel cron re-registered" >> "$LOG_FILE" 2>/dev/null
     fi
 }
 
@@ -488,6 +694,60 @@ if [ "${HTTP_WATCH:-off}" = "on" ]; then
         fi
     done
 fi
+
+# ============================================================
+# PILAR R — CORE VAULT: auto-backup ke core tiap run
+# (Pilar N upgraded: selain vault/, tiap tick backup kritis
+#  di-encrypt ke core vault — write path tanpa kode Owner.
+#  Restore/decrypt core butuh access code Owner.)
+# ============================================================
+core_vault_backup() {
+    local cv="/root/.hermes/scripts/core-vault.sh"
+    [ -x "$cv" ] || return 0
+    "$cv" backup /root/.hermes/.env env >/dev/null 2>&1
+    "$cv" backup /root/.hermes/config.yaml config >/dev/null 2>&1
+    "$cv" backup /root/.hermes/SOUL.md soul >/dev/null 2>&1
+    "$cv" backup /etc/sentinel-guard/config.env sentinel-config >/dev/null 2>&1
+    "$cv" backup /usr/local/bin/sentinel-guard.sh sentinel-script >/dev/null 2>&1
+}
+
+# ============================================================
+# AUTO-SYNC BACKUP LAPIS 1 (Pilar M upgrade)
+# Kalau config/.env berubah (disengaja), update backup lokal
+# biar self-heal selalu restore versi TERBARU, bukan versi setup.
+#
+# AMAN: hanya config.yaml + SOUL.md yang di-auto-sync (perubahan
+# wajar: model/personality). .env TIDAK di-auto-sync — backup
+# .env tetap versi token valid yang diketahui, biar attacker
+# yang ganti .env (tapi masih ada token) gak bisa nge-commit
+# versi token MEREKA sebagai backup resmi.
+# ============================================================
+auto_sync_backups() {
+    local latest_cfg latest_soul
+    latest_cfg=$(ls -t "$BACKUP_DIR"/config.yaml.changed.* 2>/dev/null | head -1)
+    latest_soul=$(ls -t "$BACKUP_DIR"/SOUL.md.changed.* 2>/dev/null | head -1)
+    if [ -n "$latest_cfg" ]; then
+        cp -f "$latest_cfg" "$BACKUP_DIR/hermes-config.yaml.bak" 2>/dev/null
+        sha256sum /root/.hermes/config.yaml | awk '{print $1}' > "$HASH_DIR/hermes-config.sha256"
+        log "auto-sync: hermes-config.yaml.bak updated ke versi terbaru"
+    fi
+    if [ -n "$latest_soul" ]; then
+        cp -f "$latest_soul" "$BACKUP_DIR/soul.md.bak" 2>/dev/null
+        sha256sum /root/.hermes/SOUL.md | awk '{print $1}' > "$HASH_DIR/soul.sha256"
+        log "auto-sync: soul.md.bak updated ke versi terbaru"
+    fi
+}
+
+# ============================================================
+# PILAR v3.0 — eksekusi di main flow (sebelum alert block)
+# ============================================================
+self_integrity
+config_watch
+secret_vault
+core_vault_backup
+auto_sync_backups
+life_loop
+cron_self_register
 
 # ============================================================
 # Alert (with dedup — Fable pattern: "Gak Semua Dikirim Notif")
