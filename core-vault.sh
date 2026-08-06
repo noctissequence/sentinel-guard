@@ -1,18 +1,18 @@
 #!/bin/bash
 # ============================================================
 # core-vault.sh — SENTINEL CORE VAULT v2 (ASYMMETRIC, Pilar R)
-# Backup SUPER-restricted: hanya Owner yang bisa decrypt.
+# Backup SUPER-restricted: hanya owner yang bisa decrypt.
 #
 # DESIGN v2 (anti-root total):
 #   - RSA-4096 keypair:
 #       core_public.pem   = di sistem, sentinel encrypt (write)
-#       core_private.pem  = DI-ENCRYPT AES dgn kode Owner,
+#       core_private.pem  = DI-ENCRYPT AES dgn kode owner,
 #                           plaintext DIHAPUS dari sistem.
 #   - Sentinel auto-backup pakai PUBLIC key (tanpa kode).
-#   - Decrypt/restore: butuh kode Owner untuk unlock private key.
+#   - Decrypt/restore: butuh kode owner untuk unlock private key.
 #   - Attacker root penuh (dapet sistem + semua file):
 #       public key doang -> TIDAK BISA decrypt.
-#       private.enc -> butuh kode Owner -> TIDAK BISA.
+#       private.enc -> butuh kode owner -> TIDAK BISA.
 # ============================================================
 set -u
 
@@ -37,7 +37,7 @@ core_init() {
     }
 }
 
-# --- encrypt private key dengan kode Owner (sekali, saat setup) ---
+# --- encrypt private key dengan kode owner (sekali, saat setup) ---
 # Usage: core-vault.sh seal-private '<kode>'
 core_seal_private() {
     local code="$1"
@@ -97,7 +97,7 @@ core_backup() {
     return 0
 }
 
-# --- decrypt dari core (READ — butuh kode Owner) ---
+# --- decrypt dari core (READ — butuh kode owner) ---
 # Usage: core-vault.sh restore <name> <dst> '<kode>'
 core_restore() {
     local name="$1" dst="$2" code="$3"

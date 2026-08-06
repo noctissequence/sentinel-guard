@@ -9,9 +9,9 @@ Independent system-level watchdog for Hermes Agent VPS. Runs WITHOUT LLM — pur
 - **Config watch** — config/.env/SOUL.md auto-restore if deleted/corrupted (anti-revoke).
 - **Secret vault** — AES-256 encrypted backups, auto every 2min.
 - **Core vault** — RSA-4096 asymmetric backup. Sentinel encrypts with public key; decrypt requires owner access code (private key sealed, plaintext removed from system).
-- **Life-loop** — Yerin ↔ Merlin heartbeat recovery. One dies → other revives.
+- **Life-loop** — Primary Hermes ↔ Secondary Hermes heartbeat recovery. One dies → other revives.
 - **Keep-alive** — watchdog of watchdogs: restarts crond, re-registers crontab/Hermes-cron.
-- **Anti-kill** — kill crond → keep-alive revives. Kill gateway secondary → restart-hermes-2 revives.
+- **Anti-kill** — kill crond → keep-alive revives. Kill gateway secondary → restart-secondary revives.
 
 ## Files
 
@@ -20,7 +20,7 @@ Independent system-level watchdog for Hermes Agent VPS. Runs WITHOUT LLM — pur
 | `sentinel.sh` | Main sentinel script (all pillars L-Q + R) |
 | `core-vault.sh` | Core vault: RSA-4096 asymmetric backup (owner-gated) |
 | `keep-alive.sh` | Watchdog ulung — keeps all layers alive |
-| `restart-hermes-2.sh` | Revives secondary (Merlin) gateway |
+| `restart-secondary.sh` | Revives secondary (Secondary Hermes) gateway |
 | `sentinel-secondary-wrapper.sh` | Wrapper for secondary sentinel cron |
 | `config.env.example` | Config template (secrets redacted) |
 

@@ -49,8 +49,8 @@ if [ -f "$JOBS_FILE" ] && ! grep -q "sentinel-guard" "$JOBS_FILE" 2>/dev/null; t
 fi
 
 # --- 4. Gateway secondary ---
-if [ -x /root/.hermes/scripts/restart-hermes-2.sh ]; then
-    /root/.hermes/scripts/restart-hermes-2.sh >/dev/null 2>&1
+if [ -x /root/.hermes/scripts/restart-secondary.sh ]; then
+    /root/.hermes/scripts/restart-secondary.sh >/dev/null 2>&1
 fi
 
 # --- 5. 9Router ---
