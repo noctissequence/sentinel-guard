@@ -925,6 +925,48 @@ github_repo_monitor() {
 
 
 # ============================================================
+# PILAR V — CRON FAILURE WATCH (2026-08-07)
+# Hermes cron jobs yang FAILED (script exit != 0 / timeout) — sentinel
+# lama cuma nge-watch cron hilang/berubah, BUKAN cron gagal. Job failure
+# = indikasi service rusak / API down / script bug — harus alert.
+# Sumber: /root/.hermes/cron/executions.db (status + error).
+# ============================================================
+cron_failure_watch() {
+    [ "${CRON_FAIL_WATCH:-on}" != "on" ] && return 0
+    local db="/root/.hermes/cron/executions.db"
+    [ -f "$db" ] || return 0
+    local since="$((NOW - 1800))"  # 30 menit terakhir
+    local since_iso
+    since_iso=$(date -u -d "@$since" '+%Y-%m-%dT%H:%M:%S' 2>/dev/null)
+    local failures state
+    failures=$(python3 -c "
+import sqlite3, sys
+try:
+    db = sqlite3.connect('$db')
+    rows = db.execute(\"SELECT job_id, status, error FROM executions WHERE finished_at >= ? AND status = 'failed'\", ('$since_iso',)).fetchall()
+    for job_id, status, error in rows:
+        err = (error or '')[:120].replace('\n', ' ')
+        print(f'{job_id}|{err}')
+except Exception as e:
+    print(f'ERR|{e}', file=sys.stderr)
+" 2>/dev/null)
+    [ -z "$failures" ] && return 0
+    local line job_id err
+    while IFS='|' read -r job_id err; do
+        [ -z "$job_id" ] && continue
+        # Dedup: cuma alert job yang BELUM pernah di-report (state file)
+        state="$STATE_DIR/cron_fail_${job_id}.last"
+        local prev
+        prev=$(cat "$state" 2>/dev/null || echo 0)
+        if [ "$prev" -lt "$since" ]; then
+            PROBLEMS="${PROBLEMS}🔴 CRON FAILED: job ${job_id} — ${err}\\n"
+            echo "$NOW" > "$state"
+        fi
+    done <<< "$failures"
+    hunter_log "cron failure watch selesai"
+}
+
+# ============================================================
 # PILAR T — HUNTER: anomaly detection (deface, corrupt, process)
 # ============================================================
 HUNTER_WATCH="${HUNTER_WATCH:-on}"
@@ -1120,6 +1162,7 @@ core_vault_backup
 auto_sync_backups
 life_loop
 cron_self_register
+cron_failure_watch
 gateway_watch
 github_repo_monitor
 hunter_scan
