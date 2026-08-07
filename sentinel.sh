@@ -961,7 +961,7 @@ healer_fix_token() {
 healer_fix_port() {
     local detail="$1"
     healer_log "port anomali: $detail (alert only)"
-    PROBLEMS="${PROBLEMS}𒌐 HUNTER: $detail\n"
+    PROBLEMS="${PROBLEMS}𒌐 HUNTER: port anomali: $detail\n"
 }
 
 # HEALER MAIN
