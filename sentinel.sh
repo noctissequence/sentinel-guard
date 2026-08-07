@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================================
 # sentinel.sh — SENTINEL GUARD v3.0 PHOENIX (SUPER-HEALER)
-# PERSONAL PRODUCTION (VPS VPS, post-incident 2026-08-06)
+# PRODUCTION VPS, post-incident 2026-08-06
 #
 # Guards:
 #   1. systemd units (restart if dead, crash-loop detect)
@@ -21,7 +21,7 @@
 #   M. CONFIG WATCH    — config.yaml/.env/SOUL.md; hilang/korup -> restore,
 #                        hash mismatch -> alert + backup .changed
 #   N. SECRET VAULT    — backup credential di-encrypt AES-256 (openssl)
-#   O. LIFE-LOOP       — heartbeat Primary Hermes <-> Secondary Hermes; saling bangunin
+#   O. LIFE-LOOP       — heartbeat Primary <-> Secondary; mutual wake
 #   P. CRON SELF-REGISTER — cron hilang -> daftar ulang sendiri
 #
 # Mode: silent saat sehat. ALERT + LOCKDOWN + HEAL saat ada anomali.
@@ -124,7 +124,7 @@ self_integrity() {
 # ============================================================
 # PILAR M — CONFIG WATCH: hermes config/.env/SOUL.md anti-tamper
 # Mode cerdas: file HILANG/KOSONG/INVALID -> restore paksa (pasti masalah).
-# Hash mismatch wajar (owner sengaja ganti) -> alert saja + backup .changed.
+# Hash mismatch wajar (Owner sengaja ganti) -> alert saja + backup .changed.
 # ============================================================
 check_config_file() {
     local file="$1" hash_file="$2" backup="$3" label="$4" min_size="${5:-100}"
@@ -221,7 +221,7 @@ secret_vault() {
 }
 
 # ============================================================
-# PILAR O — LIFE-LOOP: heartbeat Primary Hermes <-> Secondary Hermes (secondary)
+# PILAR O — LIFE-LOOP: heartbeat Primary <-> Secondary
 # Saling monitor: salah satu mati, yang lain bangunin.
 # ============================================================
 life_loop() {
@@ -252,8 +252,8 @@ life_loop() {
                     # Recovery: restart partner gateway
                     if [ "$partner" = "hermes-2" ] && [ -x /root/.hermes/scripts/restart-secondary.sh ]; then
                         /root/.hermes/scripts/restart-secondary.sh >/dev/null 2>&1 &
-                    elif [ -x /root/.hermes/scripts/hermes-2_worker.sh ]; then
-                        /root/.hermes/scripts/hermes-2_worker.sh >/dev/null 2>&1 &
+                    elif [ -x /root/.hermes/scripts/secondary_worker.sh ]; then
+                        /root/.hermes/scripts/secondary_worker.sh >/dev/null 2>&1 &
                     fi
                     echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') life-loop: $partner stale ${age}s, recovery attempted" >> "$LOG_FILE" 2>/dev/null
                 fi
@@ -686,7 +686,7 @@ if [ "${HTTP_WATCH:-off}" = "on" ]; then
             RESTART_HOOK=""
             case "$svc_name" in
                 webapp1)  RESTART_HOOK="${FLUXSCOUT_RESTART_CMD:-}" ;;
-                webapp) RESTART_HOOK="${SEQUENCEVERSE_RESTART_CMD:-}" ;;
+                sequenceverse) RESTART_HOOK="${SEQUENCEVERSE_RESTART_CMD:-}" ;;
                 webapp2)      RESTART_HOOK="${WALL3_RESTART_CMD:-}" ;;
             esac
             if [ -n "$RESTART_HOOK" ]; then
@@ -708,8 +708,8 @@ fi
 # ============================================================
 # PILAR R — CORE VAULT: auto-backup ke core tiap run
 # (Pilar N upgraded: selain vault/, tiap tick backup kritis
-#  di-encrypt ke core vault — write path tanpa kode owner.
-#  Restore/decrypt core butuh access code owner.)
+#  di-encrypt ke core vault — write path tanpa kode Owner.
+#  Restore/decrypt core butuh access code Owner.)
 # ============================================================
 core_vault_backup() {
     local cv="/root/.hermes/scripts/core-vault.sh"
@@ -749,35 +749,237 @@ auto_sync_backups() {
 }
 
 # ============================================================
-# PILAR S — GITHUB PUBLIC REPO MONITOR (anti-deface)
-# Cek commit terakhir repo public via GitHub API (tanpa auth).
+# PILAR S — GITHUB REPO MONITOR (anti-deface, 12 repo Owner)
+# Public repo: atom feed tanpa auth. Private repo: API + token.
 # Kalau author bukan owner / ada konten mencurigakan -> ALERT.
 # ============================================================
 github_repo_monitor() {
     [ "${GITHUB_WATCH:-on}" != "on" ] && return 0
-    local repos="${GITHUB_REPOS:-vpssequence/sentinel-guard}"
+    local repos="${GITHUB_REPOS:-<owner>/sentinel-guard}"
     local state="$STATE_DIR/github_state"
     mkdir -p "$state" 2>/dev/null
+    # Token untuk private repo — baca dari env atau git-credentials (mode 600)
+    local ghtoken="${GITHUB_TOKEN:-}"
+    if [ -z "$ghtoken" ] && [ -f /root/.git-credentials ]; then
+        ghtoken=$(grep -o 'https://[^:]*:[^@]*@github.com' /root/.git-credentials 2>/dev/null | sed 's|https://||;s|:.*||' | head -1)
+        ghtoken=$(grep 'github.com' /root/.git-credentials 2>/dev/null | sed 's|https://||;s|@github.com||' | cut -d: -f2)
+    fi
+    local auth=""
+    [ -n "$ghtoken" ] && auth="Authorization: token $ghtoken"
     for repo in $repos; do
-        local api="https://github.com/$repo/commits/main.atom"
-        local info sha author msg
-        info=$(curl -sL --max-time 10 -H "User-Agent: sentinel-guard" "$api" 2>/dev/null | head -c 4000)
-        sha=$(echo "$info" | grep -m1 'Grit::Commit/' | sed 's/.*Grit::Commit\/\([a-f0-9]\{40\}\).*/\1/' 2>/dev/null)
-        author=$(echo "$info" | grep -m2 '<name>' | tail -1 | sed 's/<[^>]*>//g' | tr -d ' \n' 2>/dev/null)
-        msg=$(echo "$info" | grep -m1 '<title>' | sed 's/<[^>]*>//g' | head -c 100)
+        local info sha author msg api
+        # Coba atom feed (public). Kalau kosong/404 → API (private).
+        info=$(curl -sL --max-time 10 -H "User-Agent: sentinel-guard" ${auth:+-H "$auth"} "https://github.com/$repo/commits/main.atom" 2>/dev/null | head -c 4000)
+        if ! echo "$info" | grep -q 'Grit::Commit/'; then
+            # Private/API path — ambil commit terbaru via API
+            info=$(curl -sL --max-time 10 -H "User-Agent: sentinel-guard" ${auth:+-H "$auth"} "https://api.github.com/repos/$repo/commits?per_page=1" 2>/dev/null | head -c 3000)
+            sha=$(echo "$info" | grep -m1 '"sha"' | sed 's/.*"sha": *"\([a-f0-9]\{40\}\)".*/\1/' 2>/dev/null)
+            author=$(echo "$info" | grep -m1 '"login"' | sed 's/.*"login": *"\([^"]*\)".*/\1/' 2>/dev/null)
+            msg=$(echo "$info" | grep -m1 '"message"' | sed 's/.*"message": *"\([^"]*\)".*/\1/' | head -c 100)
+        else
+            sha=$(echo "$info" | grep -m1 'Grit::Commit/' | sed 's/.*Grit::Commit\/\([a-f0-9]\{40\}\).*/\1/' 2>/dev/null)
+            author=$(echo "$info" | grep -m2 '<name>' | tail -1 | sed 's/<[^>]*>//g' | tr -d ' \n' 2>/dev/null)
+            msg=$(echo "$info" | grep -m1 '<title>' | sed 's/<[^>]*>//g' | head -c 100)
+        fi
         local prev=""
         mkdir -p "$state/$(dirname "$repo")" 2>/dev/null
         [ -f "$state/$repo.sha" ] && prev=$(cat "$state/$repo.sha" 2>/dev/null)
         if [ -n "$sha" ] && [ "$sha" != "$prev" ]; then
             # Commit BARU — cek author
-            if [ -n "$author" ] && [ "$author" != "${GITHUB_OWNER:-vpssequence}" ]; then
+            if [ -n "$author" ] && [ "$author" != "${GITHUB_OWNER:-<owner>}" ]; then
                 PROBLEMS="${PROBLEMS}🚨 GITHUB: $repo commit BARU oleh ${author:-unknown}! msg: ${msg:-?}\n"
-            elif [ -n "$author" ] && [ "$author" = "${GITHUB_OWNER:-vpssequence}" ]; then
+            elif [ -n "$author" ] && [ "$author" = "${GITHUB_OWNER:-<owner>}" ]; then
                 log "github-monitor: $repo commit oleh owner ($sha)"
             fi
             echo "$sha" > "$state/$repo.sha"
         fi
     done
+}
+
+
+# ============================================================
+# PILAR T — HUNTER: anomaly detection (deface, corrupt, process)
+# ============================================================
+HUNTER_WATCH="${HUNTER_WATCH:-on}"
+HEALER_WATCH="${HEALER_WATCH:-on}"
+HUNTER_STATE="$STATE_DIR/hunter_state"
+HUNTER_FINDINGS=""
+
+hunter_init() {
+    mkdir -p "$HUNTER_STATE" 2>/dev/null
+    : > "$HUNTER_STATE/findings.txt" 2>/dev/null
+}
+
+hunter_log() { log "hunter: $*"; }
+
+# Deteksi 1: deface artifact — cek KONTEN README/index (bukan nama file,
+# karena nama file legit owner bisa mengandung kata kunci utk dokumentasi)
+hunter_deface_scan() {
+    [ "$HUNTER_WATCH" != "on" ] && return 0
+    local webroots="${WEB_ROOT_SCAN:-/root/webapp1/frontend /root/sentinel-guard}"
+    local root f
+    for root in $webroots; do
+        [ -d "$root" ] || continue
+        # Konten deface signature di README/index/html (public web root)
+        f=$(grep -rilE "defaced-marker|pwned by|hacked by|defaced by|this site is defaced" "$root" \
+            --include="*.md" --include="*.html" --include="*.htm" 2>/dev/null | head -3)
+        if [ -n "$f" ]; then
+            HUNTER_FINDINGS="${HUNTER_FINDINGS}deface|high|$f\n"
+        fi
+    done
+    hunter_log "deface scan selesai"
+}
+
+# Deteksi 2: data korup (state JSON invalid, config kosong)
+hunter_corruption_scan() {
+    [ "$HUNTER_WATCH" != "on" ] && return 0
+    local files f
+    files=$(find "$STATE_DIR" -name "*.json" 2>/dev/null | head -10)
+    for f in $files; do
+        if ! python3 -c "import json,sys;json.load(open(sys.argv[1]))" "$f" 2>/dev/null; then
+            HUNTER_FINDINGS="${HUNTER_FINDINGS}corrupt|high|$f\n"
+        fi
+    done
+    for cf in /root/.hermes/config.yaml /etc/sentinel-guard/config.env; do
+        if [ -f "$cf" ] && [ ! -s "$cf" ]; then
+            HUNTER_FINDINGS="${HUNTER_FINDINGS}corrupt|high|$cf empty\n"
+        fi
+    done
+    hunter_log "corruption scan selesai"
+}
+
+# Deteksi 3: proses anomali (miner / reverse shell)
+hunter_process_scan() {
+    [ "$HUNTER_WATCH" != "on" ] && return 0
+    local patterns="${HUNTER_PROC_PATTERNS:-kdevtmpfsi xmrig kinsing minesweeper c3pool nanominer}"
+    local pid cmd pat
+    for pid in /proc/[0-9]*; do
+        cmd=$(cat "$pid/cmdline" 2>/dev/null | tr '\0' ' ' | head -c 150)
+        for pat in $patterns; do
+            if echo "$cmd" | grep -qi "$pat"; then
+                HUNTER_FINDINGS="${HUNTER_FINDINGS}process|high|${pid##*/}:$cmd\n"
+            fi
+        done
+    done
+    hunter_log "process scan selesai"
+}
+
+# Deteksi 4: token health (Telegram bot, GitHub)
+hunter_token_scan() {
+    [ "$HUNTER_WATCH" != "on" ] && return 0
+    local tgh gh_code
+    if [ -n "${TELEGRAM_BOT_TOKEN:-}" ]; then
+        tgh=$(curl -s --max-time 8 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/getMe" 2>/dev/null | head -c 200)
+        if ! echo "$tgh" | grep -q '"ok":true'; then
+            HUNTER_FINDINGS="${HUNTER_FINDINGS}token|high|telegram bot token invalid\n"
+        fi
+    fi
+    if [ -f /root/.git-credentials ]; then
+        gh_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 8 https://api.github.com/rate_limit 2>/dev/null)
+        if [ "$gh_code" = "401" ]; then
+            HUNTER_FINDINGS="${HUNTER_FINDINGS}token|high|github token invalid\n"
+        fi
+    fi
+    hunter_log "token scan selesai"
+}
+
+# Deteksi 5: listener port di luar whitelist
+hunter_port_scan() {
+    [ "$HUNTER_WATCH" != "on" ] && return 0
+    local whitelist="${PORT_WHITELIST:-22 80 443 20128 8084 8085 8086 8087}"
+    local listeners p
+    listeners=$(awk 'NR>1 && $4=="0A" {print $2}' /proc/net/tcp 2>/dev/null | cut -d: -f2 | while read h; do echo $((16#$h)); done 2>/dev/null | sort -un)
+    for p in $listeners; do
+        case " $whitelist " in
+            *" $p "*) ;;
+            *) HUNTER_FINDINGS="${HUNTER_FINDINGS}port|medium|listener on port $p\n" ;;
+        esac
+    done
+    hunter_log "port scan selesai"
+}
+
+# HUNTER MAIN
+hunter_scan() {
+    [ "$HUNTER_WATCH" != "on" ] && return 0
+    hunter_init
+    hunter_deface_scan
+    hunter_corruption_scan
+    hunter_process_scan
+    hunter_token_scan
+    hunter_port_scan
+    echo -e "$HUNTER_FINDINGS" > "$HUNTER_STATE/findings.txt" 2>/dev/null
+    hunter_log "scan selesai: $(echo -e "$HUNTER_FINDINGS" | grep -c '|') temuan"
+}
+
+# ============================================================
+# PILAR U — HEALER: auto-remediasi temuan hunter
+# ============================================================
+healer_log() { log "healer: $*"; }
+
+healer_fix_deface() {
+    local target="$1"
+    if [ -f "$target" ]; then
+        local qdir="$STATE_DIR/quarantine"
+        mkdir -p "$qdir" 2>/dev/null
+        mv "$target" "$qdir/$(basename "$target").$(date +%s)" 2>/dev/null
+        healer_log "deface quarantined: $target"
+        PROBLEMS="${PROBLEMS}🧹 HEALER: deface di-quarantine: $target\n"
+    fi
+}
+
+healer_fix_corrupt() {
+    local target="$1"
+    local base bak
+    base=$(basename "$target")
+    for bak in "$BACKUP_DIR"/*; do
+        if [ "$(basename "$bak")" = "$base" ]; then
+            cp "$bak" "$target" 2>/dev/null && healer_log "restored $target dari backup" && return 0
+        fi
+    done
+    local qdir="$STATE_DIR/quarantine"
+    mkdir -p "$qdir" 2>/dev/null
+    mv "$target" "${qdir}/${base}.corrupt.$(date +%s)" 2>/dev/null
+    healer_log "no backup untuk $target — quarantine"
+    PROBLEMS="${PROBLEMS}🧹 HEALER: file korup di-quarantine: $target\n"
+}
+
+healer_fix_process() {
+    local pid_target="$1"
+    pid_target="${pid_target%%:*}"
+    if kill -9 "$pid_target" 2>/dev/null; then
+        healer_log "killed suspicious process PID $pid_target"
+        PROBLEMS="${PROBLEMS}🧹 HEALER: proses anomali PID $pid_target di-kill\n"
+    fi
+}
+
+healer_fix_token() {
+    local detail="$1"
+    healer_log "token bermasalah: $detail (alert only, tidak auto-rotasi)"
+    PROBLEMS="${PROBLEMS}🔑 HUNTER: token bermasalah: $detail\n"
+}
+
+healer_fix_port() {
+    local detail="$1"
+    healer_log "port anomali: $detail (alert only)"
+    PROBLEMS="${PROBLEMS}🌐 HUNTER: $detail\n"
+}
+
+# HEALER MAIN
+healer_apply() {
+    [ "$HEALER_WATCH" != "on" ] && return 0
+    local findings_file="$HUNTER_STATE/findings.txt"
+    [ -s "$findings_file" ] || return 0
+    local line type sev target
+    while IFS='|' read -r type sev target; do
+        [ -z "$type" ] && continue
+        case "$type" in
+            deface)  healer_fix_deface "$target" ;;
+            corrupt) healer_fix_corrupt "$target" ;;
+            process) healer_fix_process "$target" ;;
+            token)   healer_fix_token "$target" ;;
+            port)    healer_fix_port "$target" ;;
+        esac
+    done < "$findings_file"
 }
 
 # ============================================================
@@ -791,6 +993,8 @@ auto_sync_backups
 life_loop
 cron_self_register
 github_repo_monitor
+hunter_scan
+healer_apply
 
 # ============================================================
 # Alert (with dedup — Fable pattern: "Gak Semua Dikirim Notif")
