@@ -1,4 +1,7 @@
 #!/bin/bash
+# CRON PATH minimal (/usr/bin:/bin) -> python3 di /usr/local/bin gak ketemu
+# -> semua python-check false-fail di cron. WAJIB export PATH penuh.
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 # ============================================================
 # sentinel.sh — SENTINEL GUARD v3.0 PHOENIX (SUPER-HEALER)
 # PRODUCTION VPS, post-incident 2026-08-06
@@ -73,7 +76,7 @@ NOW=$(date +%s)
 
 # --- bot token ---
 if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ "$TELEGRAM_BOT_TOKEN" = "YOUR_BOT_TOKEN" ]; then
-    TELEGRAM_BOT_TOKEN=$(grep -E "^TELEGRAM_BOT_TOKEN=" /root/.hermes/.env 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'")
+    TELEGRAM_BOT_TOKEN=$(grep -E "^TELEGRAM_BOT_TOKEN=" ${HERMES_HOME:-$HOME/.hermes}/.env 2>/dev/null | cut -d= -f2- | tr -d '"' | tr -d "'")
 fi
 if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
     echo "sentinel: TELEGRAM_BOT_TOKEN not configured" >&2
@@ -126,7 +129,7 @@ self_integrity() {
 # ============================================================
 # PILAR M — CONFIG WATCH: hermes config/.env/SOUL.md anti-tamper
 # Mode cerdas: file HILANG/KOSONG/INVALID -> restore paksa (pasti masalah).
-# Hash mismatch wajar (Owner sengaja ganti) -> alert saja + backup .changed.
+# Hash mismatch wajar (owner sengaja ganti) -> alert saja + backup .changed.
 # ============================================================
 check_config_file() {
     local file="$1" hash_file="$2" backup="$3" label="$4" min_size="${5:-100}"
@@ -173,9 +176,9 @@ check_config_file() {
 }
 
 config_watch() {
-    check_config_file "/root/.hermes/config.yaml" "$HASH_DIR/hermes-config.sha256" "$BACKUP_DIR/hermes-config.yaml.bak" "hermes config.yaml" 200
-    check_config_file "/root/.hermes/.env" "$HASH_DIR/hermes-env.sha256" "$BACKUP_DIR/hermes-env.bak" "hermes .env" 500
-    check_config_file "/root/.hermes/SOUL.md" "$HASH_DIR/soul.sha256" "$BACKUP_DIR/soul.md.bak" "SOUL.md" 100
+    check_config_file "${HERMES_HOME:-$HOME/.hermes}/config.yaml" "$HASH_DIR/hermes-config.sha256" "$BACKUP_DIR/hermes-config.yaml.bak" "hermes config.yaml" 200
+    check_config_file "${HERMES_HOME:-$HOME/.hermes}/.env" "$HASH_DIR/hermes-env.sha256" "$BACKUP_DIR/hermes-env.bak" "hermes .env" 500
+    check_config_file "${HERMES_HOME:-$HOME/.hermes}/SOUL.md" "$HASH_DIR/soul.sha256" "$BACKUP_DIR/soul.md.bak" "SOUL.md" 100
 }
 
 # ============================================================
@@ -236,8 +239,8 @@ life_loop() {
         date -u +%s > "$hb_dir/hermes-1.heartbeat" 2>/dev/null
         chmod 644 "$hb_dir/hermes-1.heartbeat" 2>/dev/null
     else
-        date -u +%s > "$hb_dir/secondary.heartbeat" 2>/dev/null
-        chmod 644 "$hb_dir/secondary.heartbeat" 2>/dev/null
+        date -u +%s > "$hb_dir/hermes-2.heartbeat" 2>/dev/null
+        chmod 644 "$hb_dir/hermes-2.heartbeat" 2>/dev/null
     fi
 
     if [ "${LIFE_LOOP:-on}" = "on" ]; then
@@ -255,10 +258,10 @@ life_loop() {
                     echo "$NOW" > "$alert_file"
                     send_alert "🛡️ LIFE-LOOP: $partner HEARTBEAT STALE (${age}s). Recovery attempted."
                     # Recovery: restart partner gateway
-                    if [ "$partner" = "hermes-2" ] && [ -x /root/.hermes/scripts/restart-secondary.sh ]; then
-                        /root/.hermes/scripts/restart-secondary.sh >/dev/null 2>&1 &
-                    elif [ -x /root/.hermes/scripts/secondary_worker.sh ]; then
-                        /root/.hermes/scripts/secondary_worker.sh >/dev/null 2>&1 &
+                    if [ "$partner" = "hermes-2" ] && [ -x ${HERMES_HOME:-$HOME/.hermes}/scripts/restart-secondary.sh ]; then
+                        ${HERMES_HOME:-$HOME/.hermes}/scripts/restart-secondary.sh >/dev/null 2>&1 &
+                    elif [ -x ${HERMES_HOME:-$HOME/.hermes}/scripts/secondary_worker.sh ]; then
+                        ${HERMES_HOME:-$HOME/.hermes}/scripts/secondary_worker.sh >/dev/null 2>&1 &
                     fi
                     echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') life-loop: $partner stale ${age}s, recovery attempted" >> "$LOG_FILE" 2>/dev/null
                 fi
@@ -504,7 +507,7 @@ if [ "${CRON_WATCH:-on}" = "on" ]; then
     if [ -n "$CRON_PREV" ] && [ "$CRON_SNAP" != "$CRON_PREV" ]; then
         # CRON berubah — bedakan: legit owner vs asing (smart revert per-bar).
         # JANGAN revert seluruh crontab ke baseline (boomerang: cron legit
-        # owner kayak obsidian/webapp1 ikut hilang).
+        # owner kayak obsidian/webapp ikut hilang).
         if [ "${AUTO_REVERT_CRON:-on}" = "on" ] && [ -f "$STATE_DIR/cron.baseline" ]; then
             # Baseline kosong? Ambil sekarang (setup awal)
             if [ ! -s "$STATE_DIR/cron.baseline" ]; then
@@ -627,7 +630,7 @@ if [ "${IMMUTABLE_WATCH:-on}" = "on" ]; then
     chattr +i "$_PROBE" 2>/dev/null
     if lsattr "$_PROBE" 2>/dev/null | grep -q '^[-A-Za-z]*i'; then
         # Environment SUPPORT chattr — apply ke semua file kritis
-        IMMUTABLE_FILES="${IMMUTABLE_FILES:-/root/.hermes/.env /root/.hermes/auth.json /root/.hermes/config.yaml /root/.hermes/SOUL.md /root/.hermes/scripts/sentinel.sh /etc/sentinel-guard/config.env}"
+        IMMUTABLE_FILES="${IMMUTABLE_FILES:-${HERMES_HOME:-$HOME/.hermes}/.env /root/.hermes/auth.json ${HERMES_HOME:-$HOME/.hermes}/config.yaml ${HERMES_HOME:-$HOME/.hermes}/SOUL.md /root/.hermes/scripts/sentinel.sh /etc/sentinel-guard/config.env}"
         for f in $IMMUTABLE_FILES; do
             [ -f "$f" ] || continue
             # Apply immutable flag (idempotent)
@@ -696,7 +699,7 @@ fi
 # jadi kebuka (permission downgrade = tanda manipulasi).
 # ============================================================
 if [ "${SECRET_WATCH:-on}" = "on" ]; then
-    SECRET_FILES="${SECRET_FILES:-/root/.hermes/.env /root/.hermes/auth.json /root/.hermes/config.yaml}"
+    SECRET_FILES="${SECRET_FILES:-${HERMES_HOME:-$HOME/.hermes}/.env /root/.hermes/auth.json ${HERMES_HOME:-$HOME/.hermes}/config.yaml}"
     for f in $SECRET_FILES; do
         [ -f "$f" ] || continue
         # Hash + permission check
@@ -750,15 +753,14 @@ if [ "${HTTP_WATCH:-on}" = "on" ]; then
                 continue
             fi
             # restart via restart hook jika tersedia
+            # RESTART hook via indirect expansion: <SERVICE_UPPER>_RESTART_CMD.
+            # Nama service bebas (dari HTTP_SERVICES) — gak ada daftar hardcode.
             RESTART_HOOK=""
-            case "$svc_name" in
-                webapp1)  RESTART_HOOK="${FLUXSCOUT_RESTART_CMD:-}" ;;
-                sequenceverse) RESTART_HOOK="${SEQUENCEVERSE_RESTART_CMD:-}" ;;
-                webapp2)      RESTART_HOOK="${WALL3_RESTART_CMD:-}" ;;
-                router9)    RESTART_HOOK="${NINE_ROUTER_RESTART_CMD:-/root/.hermes/scripts/restart-router9.sh}" ;;
-                pnl-api)      RESTART_HOOK="${LP_PNL_RESTART_CMD:-}" ;;
-                vault)      RESTART_HOOK="${VAULT_VIEWER_RESTART_CMD:-}" ;;
-            esac
+            hook_var="$(echo "$svc_name" | tr '[:lower:]-' '[:upper:]_')_RESTART_CMD"
+            RESTART_HOOK="${!hook_var:-}"
+            if [ -z "$RESTART_HOOK" ] && [ -x "${HERMES_HOME:-$HOME/.hermes}/scripts/restart-${svc_name}.sh" ]; then
+                RESTART_HOOK="${HERMES_HOME:-$HOME/.hermes}/scripts/restart-${svc_name}.sh"
+            fi
             if [ -n "$RESTART_HOOK" ]; then
                 # Anti-injection: tolak hook yang mengandung shell metacharacters
                 case "$RESTART_HOOK" in
@@ -787,15 +789,15 @@ fi
 # ============================================================
 # PILAR R — CORE VAULT: auto-backup ke core tiap run
 # (Pilar N upgraded: selain vault/, tiap tick backup kritis
-#  di-encrypt ke core vault — write path tanpa kode Owner.
-#  Restore/decrypt core butuh access code Owner.)
+#  di-encrypt ke core vault — write path tanpa kode owner.
+#  Restore/decrypt core butuh access code owner.)
 # ============================================================
 core_vault_backup() {
     local cv="/root/.hermes/scripts/core-vault.sh"
     [ -x "$cv" ] || return 0
-    "$cv" backup /root/.hermes/.env env >/dev/null 2>&1
-    "$cv" backup /root/.hermes/config.yaml config >/dev/null 2>&1
-    "$cv" backup /root/.hermes/SOUL.md soul >/dev/null 2>&1
+    "$cv" backup ${HERMES_HOME:-$HOME/.hermes}/.env env >/dev/null 2>&1
+    "$cv" backup ${HERMES_HOME:-$HOME/.hermes}/config.yaml config >/dev/null 2>&1
+    "$cv" backup ${HERMES_HOME:-$HOME/.hermes}/SOUL.md soul >/dev/null 2>&1
     "$cv" backup /etc/sentinel-guard/config.env sentinel-config >/dev/null 2>&1
     "$cv" backup /usr/local/bin/sentinel-guard.sh sentinel-script >/dev/null 2>&1
 }
@@ -817,12 +819,12 @@ auto_sync_backups() {
     latest_soul=$(ls -t "$BACKUP_DIR"/SOUL.md.changed.* 2>/dev/null | head -1)
     if [ -n "$latest_cfg" ]; then
         cp -f "$latest_cfg" "$BACKUP_DIR/hermes-config.yaml.bak" 2>/dev/null
-        sha256sum /root/.hermes/config.yaml | awk '{print $1}' > "$HASH_DIR/hermes-config.sha256"
+        sha256sum ${HERMES_HOME:-$HOME/.hermes}/config.yaml | awk '{print $1}' > "$HASH_DIR/hermes-config.sha256"
         log "auto-sync: hermes-config.yaml.bak updated ke versi terbaru"
     fi
     if [ -n "$latest_soul" ]; then
         cp -f "$latest_soul" "$BACKUP_DIR/soul.md.bak" 2>/dev/null
-        sha256sum /root/.hermes/SOUL.md | awk '{print $1}' > "$HASH_DIR/soul.sha256"
+        sha256sum ${HERMES_HOME:-$HOME/.hermes}/SOUL.md | awk '{print $1}' > "$HASH_DIR/soul.sha256"
         log "auto-sync: soul.md.bak updated ke versi terbaru"
     fi
 }
@@ -832,7 +834,7 @@ auto_sync_backups() {
 # Sentinel di-system cron tetap jalan walau gateway mati -> detect + restart.
 # ============================================================
 gateway_watch() {
-    local gw_pat="${GATEWAY_PROC_PATTERN:-hermes_cli.main gateway}"
+    local gw_pat="${GATEWAY_PROC_PATTERN:-*hermes*gateway*run*|*hermes_cli.main*gateway*}"
     local gw_alive gw_restart
     gw_alive=$(for pid in /proc/[0-9]*; do
         cmd=$(cat "$pid/cmdline" 2>/dev/null | tr '\0' ' ' | head -c 120)
@@ -844,6 +846,51 @@ gateway_watch() {
         if [ -x "$gw_restart" ]; then
             "$gw_restart" >/dev/null 2>&1 &
         fi
+    fi
+}
+
+# ============================================================
+# U3b: GATEWAY HEALTH CHECK (functional, 2026-08-07) — reviewer 2.1
+# gateway_watch cuma cek proses nongol di /proc — gateway hang (event loop
+# macet, network stuck) gak ke-detect. Hermes cron jobs jalan DI DALAM
+# gateway process: kalau gateway hang, executions.db gak update.
+# MAX(finished_at) lebih tua dari threshold + masih ada job aktif = HANG.
+# ============================================================
+gateway_health_check() {
+    local db="/root/.hermes/cron/executions.db"
+    local max_age="${GATEWAY_MAX_IDLE_MIN:-6}"
+    [ -f "$db" ] || return 0
+    # Skip kalau gak ada Hermes cron job aktif (MAX bakal stale -> false positive)
+    local njob
+    njob=$(python3 -c "
+import json, os
+p='/root/.hermes/cron/jobs.json'
+try:
+    d=json.load(open(p))
+    n=len(d) if isinstance(d,(list,dict)) else 0
+    print(n)
+except Exception:
+    print(0)
+" 2>/dev/null)
+    [ "${njob:-0}" -gt 0 ] || return 0
+    local last
+    last=$(python3 -c "
+import sqlite3
+try:
+    db=sqlite3.connect('$db', timeout=3)
+    r=db.execute('SELECT MAX(finished_at) FROM executions').fetchone()[0]
+    print(r or '')
+except Exception:
+    pass
+" 2>/dev/null)
+    [ -n "$last" ] || return 0
+    local last_ts now_ts age
+    last_ts=$(date -u -d "$last" +%s 2>/dev/null)
+    [ -n "$last_ts" ] || return 0
+    now_ts=$(date -u +%s)
+    age=$(( now_ts - last_ts ))
+    if [ "$age" -gt $((max_age * 60)) ]; then
+        PROBLEMS="${PROBLEMS}🟡 GATEWAY HANG — no cron exec in ${age}s (functional check)\n"
     fi
 }
 
@@ -865,13 +912,13 @@ rotate_log() {
 }
 
 # ============================================================
-# PILAR S — GITHUB REPO MONITOR (anti-deface, 12 repo Owner)
+# PILAR S — GITHUB REPO MONITOR (anti-deface)
 # Public repo: atom feed tanpa auth. Private repo: API + token.
 # Kalau author bukan owner / ada konten mencurigakan -> ALERT.
 # ============================================================
 github_repo_monitor() {
     [ "${GITHUB_WATCH:-on}" != "on" ] && return 0
-    local repos="${GITHUB_REPOS:-<owner>/sentinel-guard}"
+    local repos="${GITHUB_REPOS:-}"
     local state="$STATE_DIR/github_state"
     mkdir -p "$state" 2>/dev/null
     # Throttle private API: max 1x per 10 menit (rate limit 60/hr unauthenticated;
@@ -913,9 +960,9 @@ github_repo_monitor() {
         [ -f "$state/$repo.sha" ] && prev=$(cat "$state/$repo.sha" 2>/dev/null)
         if [ -n "$sha" ] && [ "$sha" != "$prev" ]; then
             # Commit BARU — cek author
-            if [ -n "$author" ] && [ "$author" != "${GITHUB_OWNER:-<owner>}" ]; then
+            if [ -n "$author" ] && [ -n "${GITHUB_OWNER:-}" ] && [ "$author" != "$GITHUB_OWNER" ]; then
                 PROBLEMS="${PROBLEMS}🚨 GITHUB: $repo commit BARU oleh ${author:-unknown}! msg: ${msg:-?}\n"
-            elif [ -n "$author" ] && [ "$author" = "${GITHUB_OWNER:-<owner>}" ]; then
+            elif [ -n "$author" ] && [ -n "${GITHUB_OWNER:-}" ] && [ "$author" = "$GITHUB_OWNER" ]; then
                 log "github-monitor: $repo commit oleh owner ($sha)"
             fi
             echo "$sha" > "$state/$repo.sha"
@@ -982,15 +1029,15 @@ hunter_init() {
 hunter_log() { log "hunter: $*"; }
 
 # Deteksi 1: deface artifact — cek KONTEN README/index (bukan nama file,
-# karena nama file legit owner bisa mengandung kata kunci utk dokumentasi)
+# karena nama file legit owner bisa cocok dengan pattern untuk dokumentasi)
 hunter_deface_scan() {
     [ "$HUNTER_WATCH" != "on" ] && return 0
-    local webroots="${WEB_ROOT_SCAN:-/root/webapp1/frontend /root/sentinel-guard}"
+    local webroots="${WEB_ROOT_SCAN:-/var/www/html /srv/www}"
     local root f
     for root in $webroots; do
         [ -d "$root" ] || continue
         # Konten deface signature di README/index/html (public web root)
-        f=$(grep -rilE "defaced-marker|pwned by|hacked by|defaced by|this site is defaced" "$root" \
+        f=$(grep -rilE "pwned by|hacked by|defaced by|this site is defaced" "$root" \
             --include="*.md" --include="*.html" --include="*.htm" 2>/dev/null | head -3)
         if [ -n "$f" ]; then
             HUNTER_FINDINGS="${HUNTER_FINDINGS}deface|high|$f\n"
@@ -1009,11 +1056,35 @@ hunter_corruption_scan() {
             HUNTER_FINDINGS="${HUNTER_FINDINGS}corrupt|high|$f\n"
         fi
     done
-    for cf in /root/.hermes/config.yaml /etc/sentinel-guard/config.env; do
+    for cf in ${HERMES_HOME:-$HOME/.hermes}/config.yaml /etc/sentinel-guard/config.env ${SECONDARY_CONFIG:-/etc/sentinel-guard-secondary/config.env} ${HERMES_HOME:-$HOME/.hermes}/.env; do
         if [ -f "$cf" ] && [ ! -s "$cf" ]; then
             HUNTER_FINDINGS="${HUNTER_FINDINGS}corrupt|high|$cf empty\n"
         fi
     done
+    # jobs.json (cron registry) harus valid JSON — korup = semua cron job mati.
+    # RACE: scheduler Hermes nulis jobs.json ~tiap 47 detik (burst) -> transient
+    # invalid kalau kebaca pas mid-write. Teknik parse-stable: parse OK DAN
+    # mtime gak berubah selama parse = beneran valid. Retry 3x.
+    if [ -f /root/.hermes/cron/jobs.json ]; then
+        ok=0
+        for _try in 1 2 3; do
+            m1=$(stat -c %Y /root/.hermes/cron/jobs.json 2>/dev/null || echo 0)
+            if python3 -c "import json;json.load(open('/root/.hermes/cron/jobs.json'))" 2>/dev/null; then
+                m2=$(stat -c %Y /root/.hermes/cron/jobs.json 2>/dev/null || echo 0)
+                if [ "$m1" = "$m2" ]; then ok=1; break; fi
+                sleep 2
+                continue
+            fi
+            sleep 2
+        done
+        if [ "$ok" != "1" ]; then
+            HUNTER_FINDINGS="${HUNTER_FINDINGS}corrupt|high|/root/.hermes/cron/jobs.json\n"
+        fi
+    fi
+    # .env wajib punya minimal satu token aktif
+    if [ -f ${HERMES_HOME:-$HOME/.hermes}/.env ] && ! grep -qE '(DEEPSEEK_API_KEY|OPENROUTER_API_KEY|TELEGRAM_BOT_TOKEN)=' ${HERMES_HOME:-$HOME/.hermes}/.env 2>/dev/null; then
+        HUNTER_FINDINGS="${HUNTER_FINDINGS}corrupt|high|${HERMES_HOME:-$HOME/.hermes}/.env missing tokens\n"
+    fi
     hunter_log "corruption scan selesai"
 }
 
@@ -1100,6 +1171,15 @@ healer_fix_corrupt() {
     local target="$1"
     local base bak
     base=$(basename "$target")
+    # Proteksi: file KRITIS TIDAK di-quarantine — kalau ke-quarantine
+    # (misal jobs.json), SEMUA cron mati. Alert only, butuh tangan owner.
+    case "$base" in
+        jobs.json|config.yaml|config.env|SOUL.md|.env|auth.json)
+            healer_log "KRITIS $target korup — TIDAK di-quarantine (alert only, manual)"
+            PROBLEMS="${PROBLEMS}⚕️ HEALER: file KRITIS korup (alert only, manual): $target\n"
+            return 0
+            ;;
+    esac
     for bak in "$BACKUP_DIR"/*; do
         if [ "$(basename "$bak")" = "$base" ]; then
             cp "$bak" "$target" 2>/dev/null && healer_log "restored $target dari backup" && return 0
@@ -1164,6 +1244,7 @@ life_loop
 cron_self_register
 cron_failure_watch
 gateway_watch
+    gateway_health_check
 github_repo_monitor
 hunter_scan
 healer_apply
