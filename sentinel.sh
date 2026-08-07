@@ -923,7 +923,7 @@ healer_fix_deface() {
         mkdir -p "$qdir" 2>/dev/null
         mv "$target" "$qdir/$(basename "$target").$(date +%s)" 2>/dev/null
         healer_log "deface quarantined: $target"
-        PROBLEMS="${PROBLEMS}🧹 HEALER: deface di-quarantine: $target\n"
+        PROBLEMS="${PROBLEMS}⚕️ HEALER: deface di-quarantine: $target\n"
     fi
 }
 
@@ -940,7 +940,7 @@ healer_fix_corrupt() {
     mkdir -p "$qdir" 2>/dev/null
     mv "$target" "${qdir}/${base}.corrupt.$(date +%s)" 2>/dev/null
     healer_log "no backup untuk $target — quarantine"
-    PROBLEMS="${PROBLEMS}🧹 HEALER: file korup di-quarantine: $target\n"
+    PROBLEMS="${PROBLEMS}⚕️ HEALER: file korup di-quarantine: $target\n"
 }
 
 healer_fix_process() {
@@ -948,20 +948,20 @@ healer_fix_process() {
     pid_target="${pid_target%%:*}"
     if kill -9 "$pid_target" 2>/dev/null; then
         healer_log "killed suspicious process PID $pid_target"
-        PROBLEMS="${PROBLEMS}🧹 HEALER: proses anomali PID $pid_target di-kill\n"
+        PROBLEMS="${PROBLEMS}⚕️ HEALER: proses anomali PID $pid_target di-kill\n"
     fi
 }
 
 healer_fix_token() {
     local detail="$1"
     healer_log "token bermasalah: $detail (alert only, tidak auto-rotasi)"
-    PROBLEMS="${PROBLEMS}🔑 HUNTER: token bermasalah: $detail\n"
+    PROBLEMS="${PROBLEMS}𒌐 HUNTER: token bermasalah: $detail\n"
 }
 
 healer_fix_port() {
     local detail="$1"
     healer_log "port anomali: $detail (alert only)"
-    PROBLEMS="${PROBLEMS}🌐 HUNTER: $detail\n"
+    PROBLEMS="${PROBLEMS}𒌐 HUNTER: $detail\n"
 }
 
 # HEALER MAIN
