@@ -100,6 +100,7 @@ self_integrity() {
     local hash_file="$HASH_DIR/sentinel.sha256"
     [ -f "$script" ] || {
         send_alert "🛡️ CRITICAL: sentinel-guard.sh HILANG! Restoring...";
+        chattr -i "$script" 2>/dev/null;
         cp -f "$BACKUP_DIR/sentinel-guard.sh.bak" "$script" 2>/dev/null;
         chmod +x "$script" 2>/dev/null;
         echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') sentinel restored (was missing)" >> "$LOG_FILE" 2>/dev/null;
@@ -114,6 +115,7 @@ self_integrity() {
     expected=$(awk '{print $1}' "$hash_file" 2>/dev/null)
     if [ -n "$expected" ] && [ "$current" != "$expected" ]; then
         send_alert "🛡️ WARNING: sentinel-guard.sh DIUBAH! Hash mismatch. Restoring from backup..."
+        chattr -i "$script" 2>/dev/null;
         cp -f "$BACKUP_DIR/sentinel-guard.sh.bak" "$script" 2>/dev/null
         chmod +x "$script" 2>/dev/null
         sha256sum "$script" | awk '{print $1}' > "$hash_file"
@@ -130,6 +132,7 @@ check_config_file() {
     local file="$1" hash_file="$2" backup="$3" label="$4" min_size="${5:-100}"
     [ -f "$file" ] || {
         send_alert "🛡️ CRITICAL: $label HILANG! Restoring from backup..."
+        chattr -i "$file" 2>/dev/null   # remove immutable sebelum write
         cp -f "$backup" "$file" 2>/dev/null
         chmod 600 "$file" 2>/dev/null
         echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') $label restored (missing)" >> "$LOG_FILE" 2>/dev/null
@@ -139,6 +142,7 @@ check_config_file() {
     size=$(stat -c '%s' "$file" 2>/dev/null || echo 0)
     if [ "$size" -lt "$min_size" ]; then
         send_alert "🛡️ CRITICAL: $label KORUP (${size}B < ${min_size}B)! Restoring backup..."
+        chattr -i "$file" 2>/dev/null   # remove immutable sebelum write
         cp -f "$backup" "$file" 2>/dev/null
         chmod 600 "$file" 2>/dev/null
         echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') $label restored (corrupt ${size}B)" >> "$LOG_FILE" 2>/dev/null
@@ -147,6 +151,7 @@ check_config_file() {
     if [ "$label" = "hermes .env" ]; then
         if ! grep -qE '(DEEPSEEK_API_KEY|OPENROUTER_API_KEY|TELEGRAM_BOT_TOKEN)=' "$file" 2>/dev/null; then
             send_alert "🛡️ CRITICAL: .env KEHILANGAN SEMUA TOKEN! Restoring backup (anti-revoke recovery)..."
+            chattr -i "$file" 2>/dev/null   # remove immutable sebelum write
             cp -f "$backup" "$file" 2>/dev/null
             chmod 600 "$file" 2>/dev/null
             echo "$(date -u '+%Y-%m-%d %H:%M:%S UTC') .env restored (no valid tokens)" >> "$LOG_FILE" 2>/dev/null
@@ -301,10 +306,8 @@ if command -v systemctl > /dev/null 2>&1; then
             nohup /root/.hermes/scripts/recovery-orchestrator.sh >> /var/log/recovery-orchestrator.log 2>&1 &
             ( sleep 300; rmdir "$ORCH_LOCK" 2>/dev/null ) &
         fi
-        MSG="🛰️ SENTINEL ALERT
-$(echo -e "$PROBLEMS")"
-        send_alert "$MSG"
-        exit 0
+        # NOTE: TIDAK exit di sini — sentinel harus lanjut jalan (self-heal penuh).
+        # Alert tetap terkirim via alert block di akhir (dengan dedup).
     fi
 
     for u in "${WATCH_UNITS_ARR[@]}"; do
@@ -403,21 +406,53 @@ fi
 # MODULE D: SSH KEY WATCH (NEW — key bocor tidak cukup, key baru = bahaya)
 # ============================================================
 if [ "${SSH_WATCH:-on}" = "on" ]; then
-    # authorized_keys hash
+    # authorized_keys hash — purge INCREMENTAL: key di baseline (pemilik) dipertahankan,
+    # key BARU (asing) dihapus. Mencegah lockout owner saat ganti key legit.
     AK="/root/.ssh/authorized_keys"
+    AK_BASELINE="$STATE_DIR/authorized_keys.baseline"
     if [ -f "$AK" ]; then
+        # Baseline pertama (key pemilik yang dikenal)
+        if [ ! -f "$AK_BASELINE" ]; then
+            cp "$AK" "$AK_BASELINE" 2>/dev/null
+            chmod 600 "$AK_BASELINE" 2>/dev/null
+        fi
+        # Baseline KOSONG tapi AK ada isi = setup awal legit (belum pernah baseline).
+        # Update baseline, JANGAN purge — kalau purge, semua key dianggap asing
+        # dan owner ke-lockout (boomerang).
+        if [ ! -s "$AK_BASELINE" ] && [ -s "$AK" ]; then
+            cp "$AK" "$AK_BASELINE" 2>/dev/null
+            chmod 600 "$AK_BASELINE" 2>/dev/null
+        fi
         AK_HASH=$(md5sum "$AK" 2>/dev/null | awk '{print $1}')
         AK_PREV=$(cat "$STATE_DIR/authorized_keys.hash" 2>/dev/null || echo "")
         if [ -n "$AK_PREV" ] && [ "$AK_HASH" != "$AK_PREV" ]; then
-            # Backup dulu, lalu kosongkan (kunci baru tidak dikenal = potensi intrusi)
             cp "$AK" "$STATE_DIR/authorized_keys.$(date +%s).bak" 2>/dev/null
-            PROBLEMS="${PROBLEMS}🚨 authorized_keys BERUBAH! Backup → ${STATE_DIR}/...\\n"
-            if [ "${AUTO_PURGE_KEYS:-on}" = "on" ]; then
-                : > "$AK"  # kosongkan — tidak ada key yang diizinkan otomatis
-                chmod 600 "$AK"
-                PROBLEMS="${PROBLEMS}🛡️ authorized_keys di-kosongkan (AUTO-PURGE)\\n"
+            # Hitung key asing: baris yang TIDAK ada di baseline
+            FOREIGN=$(mktemp)
+            : > "$FOREIGN"
+            while IFS= read -r line; do
+                [ -z "$line" ] && continue
+                case "$line" in \#*) continue ;; esac
+                if ! grep -Fxq "$line" "$AK_BASELINE" 2>/dev/null; then
+                    echo "$line" >> "$FOREIGN"
+                fi
+            done < "$AK"
+            if [ -s "$FOREIGN" ]; then
+                PROBLEMS="${PROBLEMS}🚨 authorized_keys BERUBAH — key ASING terdeteksi! Backup → ${STATE_DIR}/...\\n"
+                if [ "${AUTO_PURGE_KEYS:-on}" = "on" ]; then
+                    # Tulis ulang: hanya key yang ada di baseline (key pemilik)
+                    grep -Fx -f "$AK_BASELINE" "$AK" > "$AK.tmp" 2>/dev/null || : > "$AK.tmp"
+                    mv "$AK.tmp" "$AK"
+                    chmod 600 "$AK"
+                    PROBLEMS="${PROBLEMS}🛡️ Key asing DIHAPUS (${FOREIGN} baris), key pemilik dipertahankan\\n"
+                    PORT_LOCKDOWN=true
+                fi
+            else
+                # Perubahan tapi semua key dikenal — kemungkinan edit legit owner
+                cp "$AK" "$AK_BASELINE" 2>/dev/null  # update baseline
+                PROBLEMS="${PROBLEMS}🟡 authorized_keys berubah (key dikenal) — baseline di-update\\n"
             fi
-            PORT_LOCKDOWN=true
+            rm -f "$FOREIGN"
         fi
         echo "$AK_HASH" > "$STATE_DIR/authorized_keys.hash"
     fi
@@ -439,7 +474,7 @@ if [ "${PROC_WATCH:-on}" = "on" ]; then
     SUSPICIOUS=$(for pid in /proc/[0-9]*; do
         cmd=$(cat "$pid/cmdline" 2>/dev/null | tr '\0' ' ' | head -c 200)
         case "$cmd" in
-            *nc\ *|*ncat*|*socat*|*xmrig*|*minerd*|*cpuminer*|*kdevtmpfsi*|*kinsing*|*/dev/tcp*|*bash*-i*|*pty.spawn*|*sh*-i*)
+            *nc\ -l*|*ncat*|*socat*|*xmrig*|*minerd*|*cpuminer*|*kdevtmpfsi*|*kinsing*|*/dev/tcp*|*bash\ -i*|*pty.spawn*|*sh\ -i*)
                 echo "PID $(basename "$pid"): $cmd" ;;
         esac
     done)
@@ -659,7 +694,7 @@ fi
 #   HTTP_WATCH=on
 #   HTTP_SERVICES="name|url|expect_code" (space-separated)
 # ============================================================
-if [ "${HTTP_WATCH:-off}" = "on" ]; then
+if [ "${HTTP_WATCH:-on}" = "on" ]; then
     for svc in ${HTTP_SERVICES:-}; do
         svc_name="${svc%%|*}"
         rest="${svc#*|}"
@@ -688,9 +723,21 @@ if [ "${HTTP_WATCH:-off}" = "on" ]; then
                 webapp1)  RESTART_HOOK="${FLUXSCOUT_RESTART_CMD:-}" ;;
                 sequenceverse) RESTART_HOOK="${SEQUENCEVERSE_RESTART_CMD:-}" ;;
                 webapp2)      RESTART_HOOK="${WALL3_RESTART_CMD:-}" ;;
+                router9)    RESTART_HOOK="${NINE_ROUTER_RESTART_CMD:-/root/.hermes/scripts/restart-router9.sh}" ;;
+                pnl-api)      RESTART_HOOK="${LP_PNL_RESTART_CMD:-}" ;;
+                vault)      RESTART_HOOK="${VAULT_VIEWER_RESTART_CMD:-}" ;;
             esac
             if [ -n "$RESTART_HOOK" ]; then
-                eval "$RESTART_HOOK" > /dev/null 2>&1
+                # Anti-injection: tolak hook yang mengandung shell metacharacters
+                case "$RESTART_HOOK" in
+                    *";"*|*"&"*|*"|"*|*"\$(("*|*"\`"*)
+                        PROBLEMS="${PROBLEMS}🔴 ${svc_name} RESTART_HOOK mencurigakan — di-skip (config ke-tamper?)
+"
+                        ;;
+                    *)
+                        bash -c "$RESTART_HOOK" > /dev/null 2>&1
+                        ;;
+                esac
                 sleep 3
                 HTTP_CODE2=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 "$svc_url" 2>/dev/null || echo "000")
                 if [ "$HTTP_CODE2" = "$svc_expect" ]; then
@@ -749,6 +796,43 @@ auto_sync_backups() {
 }
 
 # ============================================================
+# U2: GATEWAY PRIMARY WATCH — pastikan gateway utama (primary agent) hidup.
+# Sentinel di-system cron tetap jalan walau gateway mati -> detect + restart.
+# ============================================================
+gateway_watch() {
+    local gw_pat="${GATEWAY_PROC_PATTERN:-hermes_cli.main gateway}"
+    local gw_alive gw_restart
+    gw_alive=$(for pid in /proc/[0-9]*; do
+        cmd=$(cat "$pid/cmdline" 2>/dev/null | tr '\0' ' ' | head -c 120)
+        echo "$cmd" | grep -q "hermes_cli.main gateway" && echo "$pid"
+    done 2>/dev/null | head -1)
+    if [ -z "$gw_alive" ]; then
+        gw_restart="${GATEWAY_RESTART_SCRIPT:-/root/.hermes/scripts/restart-primary.sh}"
+        PROBLEMS="${PROBLEMS}🟡 GATEWAY PRIMARY DOWN — restart via ${gw_restart}\n"
+        if [ -x "$gw_restart" ]; then
+            "$gw_restart" >/dev/null 2>&1 &
+        fi
+    fi
+}
+
+# ============================================================
+# U4: LOG ROTATION — log gak boleh membengkak tanpa batas
+# ============================================================
+rotate_log() {
+    [ -f "$LOG_FILE" ] || return 0
+    local size
+    size=$(stat -c '%s' "$LOG_FILE" 2>/dev/null || echo 0)
+    if [ "$size" -gt 5242880 ]; then  # 5MB
+        mv "$LOG_FILE" "$LOG_FILE.1" 2>/dev/null
+        for i in 3 2 1; do
+            [ -f "$LOG_FILE.$i" ] && mv "$LOG_FILE.$i" "$LOG_FILE.$((i+1))" 2>/dev/null
+        done
+        touch "$LOG_FILE" 2>/dev/null
+        log "log rotated (was ${size}B)"
+    fi
+}
+
+# ============================================================
 # PILAR S — GITHUB REPO MONITOR (anti-deface, 12 repo Owner)
 # Public repo: atom feed tanpa auth. Private repo: API + token.
 # Kalau author bukan owner / ada konten mencurigakan -> ALERT.
@@ -758,6 +842,12 @@ github_repo_monitor() {
     local repos="${GITHUB_REPOS:-<owner>/sentinel-guard}"
     local state="$STATE_DIR/github_state"
     mkdir -p "$state" 2>/dev/null
+    # Throttle private API: max 1x per 10 menit (rate limit 60/hr unauthenticated;
+    # dengan throttle: 4 repo x 6x/hr = 24/hr — aman)
+    local priv_throttle=600
+    local priv_last="$state/private_last_check"
+    local priv_ts=0
+    [ -f "$priv_last" ] && priv_ts=$(cat "$priv_last" 2>/dev/null || echo 0)
     # Token untuk private repo — baca dari env atau git-credentials (mode 600)
     local ghtoken="${GITHUB_TOKEN:-}"
     if [ -z "$ghtoken" ] && [ -f /root/.git-credentials ]; then
@@ -771,7 +861,12 @@ github_repo_monitor() {
         # Coba atom feed (public). Kalau kosong/404 → API (private).
         info=$(curl -sL --max-time 10 -H "User-Agent: sentinel-guard" ${auth:+-H "$auth"} "https://github.com/$repo/commits/main.atom" 2>/dev/null | head -c 4000)
         if ! echo "$info" | grep -q 'Grit::Commit/'; then
-            # Private/API path — ambil commit terbaru via API
+            # Private/API path — THROTTLED (10 menit) biar gak kena rate limit 60/hr
+            if [ $((NOW - priv_ts)) -lt "$priv_throttle" ]; then
+                log "github-monitor: private check throttled ($repo)"
+                continue
+            fi
+            echo "$NOW" > "$priv_last"
             info=$(curl -sL --max-time 10 -H "User-Agent: sentinel-guard" ${auth:+-H "$auth"} "https://api.github.com/repos/$repo/commits?per_page=1" 2>/dev/null | head -c 3000)
             sha=$(echo "$info" | grep -m1 '"sha"' | sed 's/.*"sha": *"\([a-f0-9]\{40\}\)".*/\1/' 2>/dev/null)
             author=$(echo "$info" | grep -m1 '"login"' | sed 's/.*"login": *"\([^"]*\)".*/\1/' 2>/dev/null)
@@ -985,6 +1080,7 @@ healer_apply() {
 # ============================================================
 # PILAR v3.0 — eksekusi di main flow (sebelum alert block)
 # ============================================================
+rotate_log
 self_integrity
 config_watch
 secret_vault
@@ -992,6 +1088,7 @@ core_vault_backup
 auto_sync_backups
 life_loop
 cron_self_register
+gateway_watch
 github_repo_monitor
 hunter_scan
 healer_apply
