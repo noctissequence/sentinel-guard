@@ -1,26 +1,63 @@
-# Sentinel Guard — Super-Healer Watchdog
+# Sentinel Guard — Self-Healing Security Watchdog + Intrusion Detection
 
-Independent system-level watchdog for Hermes Agent VPS. Runs WITHOUT LLM — pure shell + system cron.
+System-level security watchdog for Linux VPS/containers. Runs WITHOUT an LLM — pure Bash + system cron. Detects intrusions, blocks attacks, auto-heals services, and restores itself if tampered.
 
-## Version: v3.2 (2026-08-06)
+> ⚠️ **Scope note:** despite the compact name, this is a full intrusion-detection & hardening system (~1200 lines, 31 functions, 14 security modules), not a minimal 4-script watchdog. See [Modules](#modules) below.
 
-- **Independent** — system crontab (not Hermes cron). Survives gateway death.
-- **Self-heal** — script corrupt → auto-restore from backup.
-- **Config watch** — config/.env/SOUL.md auto-restore if deleted/corrupted (anti-revoke).
-- **Secret vault** — AES-256 encrypted backups, auto every 2min.
-- **Core vault** — RSA-4096 asymmetric backup. Sentinel encrypts with public key; decrypt requires owner access code (private key sealed, plaintext removed from system).
-- **Life-loop** — Primary Hermes ↔ Secondary Hermes heartbeat recovery. One dies → other revives.
-- **Keep-alive** — watchdog of watchdogs: restarts crond, re-registers crontab/Hermes-cron.
-- **Anti-kill** — kill crond → keep-alive revives. Kill gateway secondary → restart-secondary revives.
+## Highlights
+
+- **Independent** — system crontab, not app cron. Survives agent/gateway death.
+- **Self-heal** — script corrupt/tampered → auto-restore from backup (SHA-256 verified).
+- **Intrusion detection** — port, SSH key, process (miner/reverse-shell), cron, file tripwire, auth brute-force, secret-permission, HTTP service, repo deface, cron-failure, anomaly (hunter) scans.
+- **Auto-remediation (healer)** — quarantines defaced files, restores corrupted state, kills malicious processes, blocks rogue ports, purges unknown SSH keys, reverts attacker crons, restarts down services.
+- **Secret vault** — AES-256 encrypted credential backups, auto every run.
+- **Core vault** — RSA-4096 asymmetric backup. Encrypts with public key; decrypt requires owner access code (private key sealed, plaintext removed from system).
+- **Life-loop** — Primary agent ↔ Secondary agent heartbeat recovery. One dies → other revives.
+- **Keep-alive** — watchdog of watchdogs: restarts crond, re-registers crontab + app cron.
+- **Anti-kill** — kill crond → keep-alive revives. Kill secondary gateway → restart-secondary revives.
+
+## Architecture — 5 protection layers
+
+```
+L1  System cron (root)      →  runs sentinel every minute, survives everything
+L2  Sentinel guard          →  scans + heals (this repo)
+L3  Keep-alive              →  restarts crond, re-registers cron lines
+L4  Restart scripts         →  revives secondary gateway + services
+L5  Life-loop heartbeat     →  agent↔agent recovery
+```
+
+## Modules
+
+| Module | What it does | Config |
+|---|---|---|
+| **Self-integrity (L)** | SHA-256 tamper check on own script → restore from backup | — |
+| **Config watch (M)** | config/.env/soul file deleted/corrupted → auto-restore (anti-revoke) | — |
+| **Secret vault (N)** | AES-256 encrypted credential backups | — |
+| **Life-loop (O)** | heartbeat files, stale > threshold → alert + recovery | `LIFE_LOOP`, `LIFE_LOOP_PARTNER`, `LIFE_LOOP_MAX_AGE` |
+| **Cron self-register (P)** | sentinel missing from app cron → re-register | — |
+| **Core vault (R)** | RSA-4096 asymmetric backup, owner-gated restore | `core-vault.sh` |
+| **GitHub monitor (S)** | polls configured repos (Atom feed) → author ≠ owner → alert (anti-deface) | `GITHUB_WATCH`, `GITHUB_REPOS` |
+| **Cron failure watch (V)** | reads app-cron execution DB → failed jobs in window → alert | — |
+| **Hunter (T)** | anomaly scan: deface content, corrupt state/JSON, suspicious processes, dead tokens, rogue ports | `HUNTER_WATCH`, `WEB_ROOT_SCAN`, `HUNTER_PROC_PATTERNS` |
+| **Healer (U)** | remediates hunter findings: quarantine deface, restore/backup corrupt, kill process, alert token/port | `HEALER_WATCH` |
+| **Port watch** | listener outside whitelist → auto-block + alert | `PORT_WATCH`, `PORT_WHITELIST`, `AUTO_BLOCK_PORTS` |
+| **SSH key watch** | authorized_keys changed / unknown key → backup + purge | `SSH_WATCH`, `AUTO_PURGE_KEYS` |
+| **Process watch** | miner / reverse-shell / suspicious procs → kill | `PROC_WATCH`, `AUTO_KILL_SUSPICIOUS` |
+| **Cron watch** | cron modified/added by attacker → revert to baseline | `CRON_WATCH` |
+| **File watch** | tripwire on .bashrc/.profile/authorized_keys | `FILE_WATCH`, `TRIPWIRE_FILES` |
+| **Immutable watch** | chattr +i on critical files | `IMMUTABLE_WATCH`, `IMMUTABLE_FILES` |
+| **Auth watch** | brute-force SSH attempts → auto-ban IP | `AUTH_WATCH`, `FAILED_THRESHOLD`, `AUTO_BAN_IP` |
+| **Secret watch** | .env/config perms → enforce 0600 | `SECRET_WATCH`, `ENFORCE_600` |
+| **HTTP watch** | container-aware: service down → restart via command | `HTTP_WATCH`, `HTTP_SERVICES`, `<NAME>_RESTART_CMD` |
 
 ## Files
 
 | File | Function |
 |---|---|
-| `sentinel.sh` | Main sentinel script (all pillars L-Q + R) |
+| `sentinel.sh` | Main sentinel — all pillars (L–U) + security modules (~1200 lines) |
 | `core-vault.sh` | Core vault: RSA-4096 asymmetric backup (owner-gated) |
-| `keep-alive.sh` | Watchdog ulung — keeps all layers alive |
-| `restart-secondary.sh` | Revives secondary (Secondary Hermes) gateway |
+| `keep-alive.sh` | Watchdog of watchdogs — keeps crond + cron lines alive |
+| `restart-secondary.sh` | Revives secondary agent gateway |
 | `sentinel-secondary-wrapper.sh` | Wrapper for secondary sentinel cron |
 | `config.env.example` | Config template (secrets redacted) |
 
@@ -28,15 +65,60 @@ Independent system-level watchdog for Hermes Agent VPS. Runs WITHOUT LLM — pur
 
 ```bash
 cp sentinel.sh /usr/local/bin/sentinel-guard.sh
-cp core-vault.sh /root/.hermes/scripts/core-vault.sh
-chmod +x /usr/local/bin/sentinel-guard.sh /root/.hermes/scripts/core-vault.sh
-# System cron (independent layer)
+cp config.env.example /etc/sentinel-guard/config.env
+# edit config.env — set TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, whitelists
+chmod +x /usr/local/bin/sentinel-guard.sh
+
+# System cron (independent layer — survives app restarts)
 crontab -e
 # Add: * * * * * /usr/local/bin/sentinel-guard.sh
+
+# Optional secondary sentinel (runs with separate config)
+# Add: */2 * * * * SENTINEL_CONFIG=/etc/sentinel-guard-secondary/config.env /usr/local/bin/sentinel-guard.sh
 ```
+
+Manual run (debug):
+
+```bash
+bash /usr/local/bin/sentinel-guard.sh        # one full scan cycle
+bash -x /usr/local/bin/sentinel-guard.sh     # trace mode
+tail -f /var/log/sentinel-guard.log          # watch activity
+```
+
+Emergency restore:
+
+```bash
+# Owner-gated restore from RSA-encrypted core vault
+./core-vault.sh status
+./core-vault.sh restore <name> <access-code>
+```
+
+## Requirements
+
+- Linux (tested on Debian/Ubuntu containers)
+- `cron`, `curl`, `sha256sum` (standard)
+- `python3` (for JSON validation in hunter scans) — must be on PATH for cron jobs
+- Telegram bot token + chat ID for alerts (optional but recommended)
+
+## Configuration
+
+Copy `config.env.example` → `/etc/sentinel-guard/config.env`. Every module can be toggled on/off. Values:
+
+- `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` — alert destination
+- `PORT_WHITELIST` — space-separated allowed ports (22 80 443 …)
+- `HTTP_SERVICES` — `"name|url|expected_code"` list, `<NAME>_RESTART_CMD` per service
+- `GITHUB_REPOS` — `owner/repo` list to monitor for deface
+- `LIFE_LOOP_PARTNER` / `SENTINEL_IDENTITY` — heartbeat identities
+
+> 💡 **Alert-only first:** `AUTO_LOCKDOWN`, `AUTO_BLOCK_PORTS`, `AUTO_PURGE_KEYS`, `AUTO_KILL_SUSPICIOUS`, `AUTO_BAN_IP` are active by default. If you want to observe before acting, set them `off` and keep the watch on.
 
 ## Security
 
 - All secrets redacted from repo (verified: 0 token/private-key matches in files AND git history).
 - Config example ships with `[REDACTED]` placeholders.
 - Core vault private key NEVER in repo — encrypted with owner access code, plaintext removed from system.
+- Logs are rotated; no secrets are written to logs.
+
+## Status
+
+v3.3 (2026-08-07) — production-tested on container VPS. Modules: L,M,N,O,P,R,S,T,U,V + v2.0–v2.6 security modules.
