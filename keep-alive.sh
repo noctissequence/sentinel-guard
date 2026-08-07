@@ -31,7 +31,7 @@ if ! crontab -l 2>/dev/null | grep -q "sentinel-guard.sh"; then
     ( crontab -l 2>/dev/null; echo "* * * * * /usr/local/bin/sentinel-guard.sh >/dev/null 2>&1" ) | crontab -
     log "keep-alive: system crontab sentinel re-registered"
 fi
-if ! crontab -l 2>/dev/null | grep -q "sentinel-guard-secondary\|sentinel-guard-secondary"; then
+if ! crontab -l 2>/dev/null | grep -q "sentinel-guard-secondary"; then
     ( crontab -l 2>/dev/null; echo "*/2 * * * * SENTINEL_CONFIG=/etc/sentinel-guard-secondary/config.env /usr/local/bin/sentinel-guard.sh >/dev/null 2>&1" ) | crontab -
     log "keep-alive: system crontab secondary re-registered"
 fi
