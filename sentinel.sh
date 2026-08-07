@@ -502,12 +502,44 @@ if [ "${CRON_WATCH:-on}" = "on" ]; then
     CRON_SNAP=$( (crontab -l 2>/dev/null; cat /etc/cron.d/* 2>/dev/null | grep -v '^#' | grep -v '^$'; ls /etc/cron.d/ 2>/dev/null) | md5sum | awk '{print $1}' )
     CRON_PREV=$(cat "$STATE_DIR/cron.hash" 2>/dev/null || echo "")
     if [ -n "$CRON_PREV" ] && [ "$CRON_SNAP" != "$CRON_PREV" ]; then
-        PROBLEMS="${PROBLEMS}🚨 CRON berubah! (crontab / etc/cron.d)\\\\n"
-        PORT_LOCKDOWN=true
-        # AUTO-REVERT: kembalikan crontab ke baseline (hapus cron asing)
+        # CRON berubah — bedakan: legit owner vs asing (smart revert per-bar).
+        # JANGAN revert seluruh crontab ke baseline (boomerang: cron legit
+        # owner kayak obsidian/webapp1 ikut hilang).
         if [ "${AUTO_REVERT_CRON:-on}" = "on" ] && [ -f "$STATE_DIR/cron.baseline" ]; then
-            cat "$STATE_DIR/cron.baseline" | crontab - 2>/dev/null && \
-                PROBLEMS="${PROBLEMS}🛡️ crontab AUTO-REVERTED ke baseline\\\\n"
+            # Baseline kosong? Ambil sekarang (setup awal)
+            if [ ! -s "$STATE_DIR/cron.baseline" ]; then
+                crontab -l 2>/dev/null > "$STATE_DIR/cron.baseline"
+            fi
+            # Baris BARU = yang ada di crontab sekarang tapi TIDAK di baseline
+            NEW_LINES=$(comm -13 <(sort "$STATE_DIR/cron.baseline" 2>/dev/null) <(crontab -l 2>/dev/null | sort) 2>/dev/null)
+            if [ -n "$NEW_LINES" ]; then
+                # Pattern mencurigakan (attacker): tmp/shm, curl|bash, wget|sh, miner, reverse
+                SUS_CRON=$(echo "$NEW_LINES" | grep -E "/tmp/|/dev/shm/|curl .*\|.*(ba)?sh|wget .*\|.*(ba)?sh|minerd|xmrig|kdevtmpfsi|kinsing|\.onion|nc -e|ncat -e" 2>/dev/null)
+                if [ -n "$SUS_CRON" ]; then
+                    PROBLEMS="${PROBLEMS}🚨 CRON MEN CURIGAKAN terdeteksi — dihapus:\\\\n$SUS_CRON\\\\n"
+                    # Hapus cuma baris mencurigakan dari crontab
+                    crontab -l 2>/dev/null | grep -vF -e "$SUS_CRON" > /tmp/cron.clean 2>/dev/null
+                    # grep -vF -e per baris — handle multi-line
+                    while IFS= read -r sus_line; do
+                        [ -z "$sus_line" ] && continue
+                        crontab -l 2>/dev/null | grep -vF "$sus_line" > /tmp/cron.clean2 2>/dev/null
+                        mv /tmp/cron.clean2 /tmp/cron.clean
+                    done <<< "$SUS_CRON"
+                    cat /tmp/cron.clean | crontab - 2>/dev/null
+                    PROBLEMS="${PROBLEMS}🛡️ cron mencurigakan DIHAPUS (smart revert)\\\\n"
+                    PORT_LOCKDOWN=true
+                else
+                    # Cron baru wajar (owner nambah legit) — update baseline, jangan hapus
+                    crontab -l 2>/dev/null > "$STATE_DIR/cron.baseline"
+                    PROBLEMS="${PROBLEMS}🟡 CRON berubah (entry wajar ditambahkan) — baseline di-update\\\\n"
+                fi
+            else
+                # Perubahan lain (file di /etc/cron.d dll) — update baseline
+                crontab -l 2>/dev/null > "$STATE_DIR/cron.baseline"
+            fi
+        else
+            PROBLEMS="${PROBLEMS}🚨 CRON berubah! (crontab / etc/cron.d)\\\\\\\\n"
+            PORT_LOCKDOWN=true
         fi
     fi
     echo "$CRON_SNAP" > "$STATE_DIR/cron.hash"
