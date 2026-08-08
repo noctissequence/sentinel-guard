@@ -53,13 +53,13 @@ if [ -x /root/.hermes/scripts/restart-secondary.sh ]; then
     /root/.hermes/scripts/restart-secondary.sh >/dev/null 2>&1
 fi
 
-# --- 5. 9Router ---
-if [ -x /root/.hermes/scripts/restart-router9.sh ]; then
-    /root/.hermes/scripts/restart-router9.sh >/dev/null 2>&1
+# --- 5. router ---
+if [ -x /root/.hermes/scripts/restart-router.sh ]; then
+    /root/.hermes/scripts/restart-router.sh >/dev/null 2>&1
 fi
-if ! crontab -l 2>/dev/null | grep -q "restart-router9"; then
-    ( crontab -l 2>/dev/null; echo "*/3 * * * * /root/.hermes/scripts/restart-router9.sh >/dev/null 2>&1" ) | crontab -
-    log "keep-alive: system crontab router9-watch re-registered"
+if ! crontab -l 2>/dev/null | grep -q "restart-router"; then
+    ( crontab -l 2>/dev/null; echo "*/3 * * * * /root/.hermes/scripts/restart-router.sh >/dev/null 2>&1" ) | crontab -
+    log "keep-alive: system crontab router-watch re-registered"
 fi
 
 exit 0

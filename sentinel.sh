@@ -10,7 +10,7 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 #   1. systemd units (restart if dead, crash-loop detect)
 #   2. JSON state file validation (corrupt -> backup + reset)
 #   3. NEW: PORT EXPOSURE — service baru listen 0.0.0.0 tanpa auth
-#      (root cause insiden 8765/postdraft) -> alert + auto-block
+#      (root cause: exposed service tanpa auth) -> alert + auto-block
 #   4. NEW: SSH KEY WATCH — authorized_keys berubah / key baru
 #      di /root/.ssh -> alert + backup + hapus
 #   5. NEW: PROCESS WATCH — reverse shell / miner / suspicious
@@ -361,7 +361,7 @@ done
 # ============================================================
 # MODULE C: PORT EXPOSURE WATCH (NEW — root cause fix)
 # Service baru listen di 0.0.0.0/:: tanpa whitelist = bahaya
-# (insiden: postdraft 8765 serve seluruh home dir tanpa auth)
+# (insiden: exposed service serve seluruh home dir tanpa auth)
 # ============================================================
 PORT_LOCKDOWN=false
 if [ "${PORT_WATCH:-on}" = "on" ]; then
@@ -1126,7 +1126,7 @@ hunter_token_scan() {
 # Deteksi 5: listener port di luar whitelist
 hunter_port_scan() {
     [ "$HUNTER_WATCH" != "on" ] && return 0
-    local whitelist="${PORT_WHITELIST:-22 80 443 20128 8084 8085 8086 8087}"
+    local whitelist="${PORT_WHITELIST:-22 80 443 8080 8443}"
     local listeners p
     listeners=$(awk 'NR>1 && $4=="0A" {print $2}' /proc/net/tcp 2>/dev/null | cut -d: -f2 | while read h; do echo $((16#$h)); done 2>/dev/null | sort -un)
     for p in $listeners; do
