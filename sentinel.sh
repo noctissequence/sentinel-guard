@@ -1232,6 +1232,148 @@ healer_apply() {
 }
 
 # ============================================================
+
+# ============================================================
+# MODULE V: FIM WATCH (OSSEC syscheck-style) — v3.4
+# File Integrity Monitoring: baseline sha256+perm+owner untuk file
+# kritis (/etc/passwd, shadow, sshd_config, crontab, dll).
+# Perubahan = tanda tamper -> alert. Baseline dibuat run pertama
+# (tanpa alert). Dedup alert per-file (FIM_DEDUP_SEC).
+# FIM_UPDATE_BASELINE=on -> baseline ikut di-update saat alert
+# (buat file yang legit sering berubah).
+# ============================================================
+fim_watch() {
+    [ "${FIM_WATCH:-on}" != "on" ] && return 0
+    local fim_files="${FIM_FILES:-/etc/passwd /etc/shadow /etc/group /etc/sudoers /etc/ssh/sshd_config /etc/crontab /etc/hosts}"
+    local bdir="$STATE_DIR/fim_baseline"
+    mkdir -p "$bdir" 2>/dev/null
+    local f key baseline current last last_ts
+    for f in $fim_files; do
+        [ -f "$f" ] || continue
+        key=$(printf '%s' "$f" | md5sum | awk '{print $1}')
+        baseline="$bdir/$key"
+        current="$(sha256sum "$f" 2>/dev/null | awk '{print $1}')|$(stat -c '%a|%U' "$f" 2>/dev/null)"
+        if [ ! -f "$baseline" ]; then
+            printf '%s\n' "$current" > "$baseline" 2>/dev/null
+            continue
+        fi
+        if [ "$(cat "$baseline" 2>/dev/null)" != "$current" ]; then
+            last="$bdir/$key.alert_ts"
+            last_ts=$(cat "$last" 2>/dev/null || echo 0)
+            if [ $((NOW - last_ts)) -gt "${FIM_DEDUP_SEC:-3600}" ]; then
+                PROBLEMS="${PROBLEMS}🚨 FIM: $f BERUBAH (hash/perm/owner mismatch) — tanda tamper!\\n"
+                echo "$NOW" > "$last" 2>/dev/null
+                if [ "${FIM_UPDATE_BASELINE:-off}" = "on" ]; then
+                    printf '%s\n' "$current" > "$baseline" 2>/dev/null
+                fi
+            fi
+        fi
+    done
+}
+
+# ============================================================
+# MODULE W: AUTH BAN WATCH (Fail2ban-style) — v3.4
+# Count failed login PER-IP dalam BAN_FINDTIME detik -> IP yang lewat
+# BAN_MAXRETRY -> ban (ufw/iptables kalau tersedia) + state file.
+# Unban otomatis setelah BAN_TIME. Dedup: 1x per IP (state file).
+# Idle kalau /var/log/auth.log tidak ada (container minimal).
+# ============================================================
+auth_ban_watch() {
+    [ "${AUTH_BAN_WATCH:-on}" != "on" ] && return 0
+    local auth_log="/var/log/auth.log"
+    [ -f "$auth_log" ] || return 0
+    local findtime="${BAN_FINDTIME:-600}"
+    local maxretry="${BAN_MAXRETRY:-5}"
+    local bantime="${BAN_TIME:-3600}"
+    local since ban_dir count ip state_file
+    ban_dir="$STATE_DIR/auth_ban"
+    mkdir -p "$ban_dir" 2>/dev/null
+    since=$(date -u -d "$findtime seconds ago" '+%b %e %H:%M' 2>/dev/null)
+    while read -r count ip; do
+        [ -n "$ip" ] || continue
+        [ "$count" -lt "$maxretry" ] && continue
+        case "$ip" in *[!0-9.]*|"") continue ;; esac
+        state_file="$ban_dir/$ip"
+        if [ ! -f "$state_file" ]; then
+            echo "$NOW" > "$state_file" 2>/dev/null
+            if command -v ufw >/dev/null 2>&1; then ufw deny from "$ip" 2>/dev/null; fi
+            if command -v iptables >/dev/null 2>&1; then iptables -A INPUT -s "$ip" -j DROP 2>/dev/null; fi
+            PROBLEMS="${PROBLEMS}🚨 AUTH BAN: $ip di-ban (${count} failed login dalam ${findtime}s)\\n"
+        fi
+    done < <(awk -v s="$since" 'BEGIN{IGNORECASE=1}
+        /Failed password|Invalid user|authentication failure/ && $0 >= s {
+            for(i=1;i<=NF;i++) if($i=="from") print $(i+1)
+        }' "$auth_log" 2>/dev/null | sort | uniq -c | sort -rn)
+    # Unban otomatis setelah bantime
+    local f ip_ts ip
+    for f in "$ban_dir"/*; do
+        [ -f "$f" ] || continue
+        ip_ts=$(cat "$f" 2>/dev/null || echo 0)
+        if [ $((NOW - ip_ts)) -gt "$bantime" ]; then
+            ip=$(basename "$f")
+            if command -v iptables >/dev/null 2>&1; then iptables -D INPUT -s "$ip" -j DROP 2>/dev/null; fi
+            if command -v ufw >/dev/null 2>&1; then ufw delete deny from "$ip" 2>/dev/null; fi
+            rm -f "$f" 2>/dev/null
+            log "auth_ban: unban $ip (bantime habis)"
+        fi
+    done
+}
+
+# ============================================================
+# MODULE X: ROOTCHECK WATCH (OSSEC rootcheck-style) — v3.4
+# 3 deteksi: (1) setuid/setgid binary baru (privilege escalation),
+# (2) hidden process persisten (di /proc tapi gak di ps + ada
+# cmdline — rootkit evasion), (3) interface promiscuous (sniffing).
+# ============================================================
+rootcheck_watch() {
+    [ "${ROOTCHECK_WATCH:-on}" != "on" ] && return 0
+    local wl="${ROOTCHECK_SETUID_WHITELIST:-}"
+    # 1) setuid/setgid scan — baseline list
+    local su_baseline="$STATE_DIR/rootcheck_setuid.baseline"
+    local su_now su_old new_bin
+    su_now=$(find / -xdev -type f \( -perm -4000 -o -perm -2000 \) 2>/dev/null | sort)
+    if [ ! -f "$su_baseline" ]; then
+        printf '%s\n' "$su_now" > "$su_baseline" 2>/dev/null
+    else
+        su_old=$(cat "$su_baseline" 2>/dev/null)
+        for new_bin in $(comm -13 <(printf '%s\n' "$su_old") <(printf '%s\n' "$su_now") 2>/dev/null); do
+            case " $wl " in *" $new_bin "*) continue ;; esac
+            PROBLEMS="${PROBLEMS}🚨 ROOTCHECK: setuid/setgid BARU: $new_bin — potensi privilege escalation!\\n"
+        done
+        printf '%s\n' "$su_now" > "$su_baseline" 2>/dev/null
+    fi
+    # 2) hidden process — double check (hindari transient race)
+    local h1 h2 pid persistent=""
+    h1=$(comm -23 <(ls -d /proc/[0-9]* 2>/dev/null | sed 's#/proc/##' | sort -n) <(ps -e -o pid= 2>/dev/null | tr -d ' ' | sort -n) 2>/dev/null)
+    if [ -n "$h1" ]; then
+        sleep 1
+        h2=$(comm -23 <(ls -d /proc/[0-9]* 2>/dev/null | sed 's#/proc/##' | sort -n) <(ps -e -o pid= 2>/dev/null | tr -d ' ' | sort -n) 2>/dev/null)
+        for pid in $h1; do
+            case " $h2 " in *" $pid "*)
+                # persisten di /proc — cek cmdline (kernel thread = kosong, skip)
+                if [ -s "/proc/$pid/cmdline" ]; then
+                    persistent="$persistent $pid"
+                fi
+                ;;
+            esac
+        done
+        if [ -n "$persistent" ]; then
+            PROBLEMS="${PROBLEMS}🟡 ROOTCHECK: proses hidden persisten (ada cmdline, gak di ps):${persistent}\\n"
+        fi
+    fi
+    # 3) interface promiscuous
+    local iface flags iname
+    for iface in /sys/class/net/*/flags; do
+        [ -f "$iface" ] || continue
+        flags=$(cat "$iface" 2>/dev/null || echo 0)
+        case "$flags" in 0x*) ;; *) continue ;; esac
+        if [ $((flags & 0x40)) -ne 0 ] 2>/dev/null; then
+            iname=$(basename "$(dirname "$iface")")
+            PROBLEMS="${PROBLEMS}🟡 ROOTCHECK: interface $iname PROMISC — kemungkinan sniffing!\\n"
+        fi
+    done
+}
+
 # PILAR v3.0 — eksekusi di main flow (sebelum alert block)
 # ============================================================
 rotate_log
@@ -1248,6 +1390,9 @@ gateway_watch
 github_repo_monitor
 hunter_scan
 healer_apply
+fim_watch
+auth_ban_watch
+rootcheck_watch
 
 # ============================================================
 # Alert (with dedup — Fable pattern: "Gak Semua Dikirim Notif")
