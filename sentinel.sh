@@ -34,9 +34,15 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 set -u
 
 CONFIG="${SENTINEL_CONFIG:-/etc/sentinel-guard/config.env}"
+# exit kalau dijalanin langsung; return kalau di-source (SENTINEL_FUNC_TEST=1)
+# biar test runner gak kebunuh oleh exit di top-level.
+sg_exit() {
+    if [ "${SENTINEL_FUNC_TEST:-0}" != "1" ]; then exit "$1"; fi
+    return "$1"
+}
 if [ ! -f "$CONFIG" ]; then
     echo "sentinel: config not found at $CONFIG" >&2
-    exit 1
+    sg_exit 1
 fi
 # shellcheck disable=SC1090
 . "$CONFIG"
@@ -47,7 +53,7 @@ LOCK_FILE="${SENTINEL_LOCK_FILE:-/tmp/sentinel-guard.lock}"
 if [ -L "$LOCK_FILE" ]; then rm -f "$LOCK_FILE" 2>/dev/null; fi
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
-    exit 0
+    sg_exit 0
 fi
 
 # --- defaults ---
@@ -73,7 +79,7 @@ for _var in CRASH_THRESHOLD CRASH_WINDOW_SEC CASCADE_THRESHOLD; do
     _val="${!_var:-}"
     if ! [[ "$_val" =~ ^[0-9]+$ ]]; then
         echo "sentinel: config error — $_var harus angka, dapat: '$_val'" >&2
-        exit 1
+        sg_exit 1
     fi
 done
 
@@ -85,7 +91,7 @@ if [ -z "${TELEGRAM_BOT_TOKEN:-}" ] || [ "$TELEGRAM_BOT_TOKEN" = "YOUR_BOT_TOKEN
 fi
 if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
     echo "sentinel: TELEGRAM_BOT_TOKEN not configured" >&2
-    exit 1
+    sg_exit 1
 fi
 
 send_alert() {

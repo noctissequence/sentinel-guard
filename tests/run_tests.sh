@@ -69,6 +69,7 @@ t_start "4. FIM: baseline + tamper detect"
 sed 's/\[REDACTED\]//g; /^FIM_FILES=/d; /^AUTH_BAN_WATCH=/d; /^ROOTCHECK_WATCH=/d; /^BAN_MAXRETRY=/d; /^BAN_FINDTIME=/d; /^BAN_TIME=/d' "$SCRIPT_DIR/config.env.example" > "$TMPDIR_TEST/config.env"
 export SENTINEL_FUNC_TEST=1
 export SENTINEL_STATE_DIR="$TMPDIR_TEST/state"
+export SENTINEL_LOCK_FILE="$TMPDIR_TEST/lock"
 export SENTINEL_CONFIG="$TMPDIR_TEST/config.env"
 export SENTINEL_LOG_FILE="$TMPDIR_TEST/sentinel.log"
 export FIM_WATCH=on
