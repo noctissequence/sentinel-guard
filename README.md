@@ -2,13 +2,14 @@
 
 System-level security watchdog for Linux VPS/containers. Runs WITHOUT an LLM — pure Bash + system cron. Detects intrusions, blocks attacks, auto-heals services, and restores itself if tampered.
 
-> ⚠️ **Scope note:** despite the compact name, this is a full intrusion-detection & hardening system (~1200 lines, 31 functions, 14 security modules), not a minimal 4-script watchdog. See [Modules](#modules) below.
+> ⚠️ **Scope note:** despite the compact name, this is a full intrusion-detection & hardening system (~1426 lines, 17 security modules), not a minimal 4-script watchdog. See [Modules](#modules) below.
 
 ## Highlights
 
 - **Independent** — system crontab, not app cron. Survives agent/gateway death.
 - **Self-heal** — script corrupt/tampered → auto-restore from backup (SHA-256 verified).
 - **Intrusion detection** — port, SSH key, process (miner/reverse-shell), cron, file tripwire, auth brute-force, secret-permission, HTTP service, repo deface, cron-failure, anomaly (hunter) scans.
+- **OSSEC/Fail2ban-style hardening** — file integrity monitoring (baseline hash+perm+owner on critical files), per-IP auth brute-force ban with auto-unban, rootkit-style rootcheck (setuid drift, hidden processes, promiscuous interfaces).
 - **Auto-remediation (healer)** — quarantines defaced files, restores corrupted state, kills malicious processes, blocks rogue ports, purges unknown SSH keys, reverts attacker crons, restarts down services.
 - **Secret vault** — AES-256 encrypted credential backups, auto every run.
 - **Core vault** — RSA-4096 asymmetric backup. Encrypts with public key; decrypt requires owner access code (private key sealed, plaintext removed from system).
@@ -37,9 +38,12 @@ L5  Life-loop heartbeat     →  agent↔agent recovery
 | **Cron self-register (P)** | sentinel missing from app cron → re-register | — |
 | **Core vault (R)** | RSA-4096 asymmetric backup, owner-gated restore | `core-vault.sh` |
 | **GitHub monitor (S)** | polls configured repos (Atom feed) → author ≠ owner → alert (anti-deface) | `GITHUB_WATCH`, `GITHUB_REPOS` |
-| **Cron failure watch (V)** | reads app-cron execution DB → failed jobs in window → alert | — |
+| **Cron failure watch** | reads app-cron execution DB → failed jobs in window → alert | — |
 | **Hunter (T)** | anomaly scan: deface content, corrupt state/JSON, suspicious processes, dead tokens, rogue ports | `HUNTER_WATCH`, `WEB_ROOT_SCAN`, `HUNTER_PROC_PATTERNS` |
 | **Healer (U)** | remediates hunter findings: quarantine deface, restore/backup corrupt, kill process, alert token/port | `HEALER_WATCH` |
+| **FIM watch (V)** | file integrity monitoring: baseline sha256+perm+owner on critical files; change → tamper alert (OSSEC syscheck-style) | `FIM_WATCH`, `FIM_FILES`, `FIM_UPDATE_BASELINE` |
+| **Auth ban watch (W)** | per-IP failed-login count in window → ban over threshold, auto-unban after ban time (Fail2ban-style) | `AUTH_BAN_WATCH`, `BAN_MAXRETRY`, `BAN_FINDTIME`, `BAN_TIME` |
+| **Rootcheck watch (X)** | setuid/setgid drift, persistent hidden processes, promiscuous interfaces (OSSEC rootcheck-style) | `ROOTCHECK_WATCH`, `ROOTCHECK_SETUID_WHITELIST` |
 | **Port watch** | listener outside whitelist → auto-block + alert | `PORT_WATCH`, `PORT_WHITELIST`, `AUTO_BLOCK_PORTS` |
 | **SSH key watch** | authorized_keys changed / unknown key → backup + purge | `SSH_WATCH`, `AUTO_PURGE_KEYS` |
 | **Process watch** | miner / reverse-shell / suspicious procs → kill | `PROC_WATCH`, `AUTO_KILL_SUSPICIOUS` |
@@ -54,9 +58,10 @@ L5  Life-loop heartbeat     →  agent↔agent recovery
 
 | File | Function |
 |---|---|
-| `sentinel.sh` | Main sentinel — all pillars (L–U) + security modules (~1200 lines) |
+| `sentinel.sh` | Main sentinel — all pillars (L–X) + security modules (~1426 lines) |
 | `core-vault.sh` | Core vault: RSA-4096 asymmetric backup (owner-gated) |
 | `keep-alive.sh` | Watchdog of watchdogs — keeps crond + cron lines alive |
+| `restart-router.sh` | Revives router service if down |
 | `restart-secondary.sh` | Revives secondary agent gateway |
 | `sentinel-secondary-wrapper.sh` | Wrapper for secondary sentinel cron |
 | `config.env.example` | Config template (secrets redacted) |
@@ -109,6 +114,8 @@ Copy `config.env.example` → `/etc/sentinel-guard/config.env`. Every module can
 - `HTTP_SERVICES` — `"name|url|expected_code"` list, `<NAME>_RESTART_CMD` per service
 - `GITHUB_REPOS` — `owner/repo` list to monitor for deface
 - `LIFE_LOOP_PARTNER` / `SENTINEL_IDENTITY` — heartbeat identities
+- `FIM_FILES` — space-separated critical files for integrity baseline
+- `BAN_MAXRETRY` / `BAN_FINDTIME` / `BAN_TIME` — per-IP auth-ban policy (Fail2ban-style)
 
 > 💡 **Alert-only first:** `AUTO_LOCKDOWN`, `AUTO_BLOCK_PORTS`, `AUTO_PURGE_KEYS`, `AUTO_KILL_SUSPICIOUS`, `AUTO_BAN_IP` are active by default. If you want to observe before acting, set them `off` and keep the watch on.
 
@@ -118,7 +125,8 @@ Copy `config.env.example` → `/etc/sentinel-guard/config.env`. Every module can
 - Config example ships with `[REDACTED]` placeholders.
 - Core vault private key NEVER in repo — encrypted with owner access code, plaintext removed from system.
 - Logs are rotated; no secrets are written to logs.
+- State dir + lock file hardened against `/tmp` symlink races (mode 700, anti-symlink).
 
 ## Status
 
-v3.3 (2026-08-07) — production-tested on container VPS. Modules: L,M,N,O,P,R,S,T,U,V + v2.0–v2.6 security modules.
+v3.4 (2026-08-08) — production-tested on container VPS. Modules: L,M,N,O,P,R,S,T,U + FIM (V), AuthBan (W), Rootcheck (X) + v2.0–v2.6 security modules. Design patterns borrowed from OSSEC / Wazuh / Fail2ban (all GPL — concepts reimplemented from scratch, no copied code).
