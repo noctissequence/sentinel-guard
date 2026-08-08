@@ -78,6 +78,7 @@ echo "original" > "$TESTFILE"
 export FIM_FILES="$TESTFILE"
 
 # source script (mode FUNC_TEST — main flow di-skip)
+# shellcheck disable=SC1090
 if ! source "$SCRIPT" >/dev/null 2>&1; then
     t_fail "source sentinel.sh gagal (FUNC_TEST mode)"
 else
@@ -116,8 +117,6 @@ Aug  8 09:04:01 host sshd[104]: Failed password for root from 5.6.7.8 port 22 ss
 EOF
 # simulasikan parser auth_ban_watch dengan auth.log fake (path di-override via fungsi)
 export SENTINEL_FUNC_TEST=1
-AUTH_BAN_LOG_FILE_OVERRIDE="$AUTHLOG"
-
 # Parse manual: count per IP (sama dengan logic di fungsi)
 COUNT=$(grep -E "Failed password" "$AUTHLOG" | grep -oE "from [0-9.]+" | awk '{print $2}' | sort | uniq -c | sort -rn | awk 'NR==1{print $1}')
 [ "$COUNT" -ge 3 ] && t_pass "IP dengan 3+ failures terdeteksi (count=$COUNT)" || t_fail "count IP salah ($COUNT)"

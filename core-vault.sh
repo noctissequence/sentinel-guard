@@ -103,7 +103,7 @@ core_restore() {
     local name="$1" dst="$2" code="$3"
     [ -f "$CORE_DIR/$name.core" ] || { echo "ERROR: $name.core tidak ada"; exit 1; }
     core_unlock_private "$code" || { echo "ERROR: access code salah. Restore ditolak."; exit 1; }
-    local tmp_dec rsa_b64 data_b64 aes_key
+    local tmp_dec aes_key
     tmp_dec=$(mktemp /tmp/.core_dec_XXXXXX)
     # Parse bundle
     awk '/^DATA$/{f=1;next} f' "$CORE_DIR/$name.core" | base64 -d > "$tmp_dec.data" 2>/dev/null
