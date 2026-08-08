@@ -2,7 +2,7 @@
 
 System-level security watchdog for Linux VPS/containers. Runs WITHOUT an LLM — pure Bash + system cron. Detects intrusions, blocks attacks, auto-heals services, and restores itself if tampered.
 
-> ⚠️ **Scope note:** despite the compact name, this is a full intrusion-detection & hardening system (~1426 lines, 17 security modules), not a minimal 4-script watchdog. See [Modules](#modules) below.
+> ⚠️ **Scope note:** despite the compact name, this is a full intrusion-detection & hardening system (~1450 lines, 22 security modules), not a minimal 4-script watchdog. See [Modules](#modules) below.
 
 ## Highlights
 
@@ -41,9 +41,9 @@ L5  Life-loop heartbeat     →  agent↔agent recovery
 | **Cron failure watch** | reads app-cron execution DB → failed jobs in window → alert | — |
 | **Hunter (T)** | anomaly scan: deface content, corrupt state/JSON, suspicious processes, dead tokens, rogue ports | `HUNTER_WATCH`, `WEB_ROOT_SCAN`, `HUNTER_PROC_PATTERNS` |
 | **Healer (U)** | remediates hunter findings: quarantine deface, restore/backup corrupt, kill process, alert token/port | `HEALER_WATCH` |
-| **FIM watch (V)** | file integrity monitoring: baseline sha256+perm+owner on critical files; change → tamper alert (OSSEC syscheck-style) | `FIM_WATCH`, `FIM_FILES`, `FIM_UPDATE_BASELINE` |
-| **Auth ban watch (W)** | per-IP failed-login count in window → ban over threshold, auto-unban after ban time (Fail2ban-style) | `AUTH_BAN_WATCH`, `BAN_MAXRETRY`, `BAN_FINDTIME`, `BAN_TIME` |
-| **Rootcheck watch (X)** | setuid/setgid drift, persistent hidden processes, promiscuous interfaces (OSSEC rootcheck-style) | `ROOTCHECK_WATCH`, `ROOTCHECK_SETUID_WHITELIST` |
+| **FIM watch (V)** | file integrity monitoring: baseline sha256+perm+owner on critical files; change → tamper alert (OSSEC syscheck-style), optional auto-restore | `FIM_WATCH`, `FIM_FILES`, `FIM_UPDATE_BASELINE`, `FIM_AUTO_RESTORE` |
+| **Auth ban watch (W)** | per-IP failed-login count in window → ban over threshold, auto-unban after ban time, IP whitelist (Fail2ban-style) | `AUTH_BAN_WATCH`, `BAN_MAXRETRY`, `BAN_FINDTIME`, `BAN_TIME`, `BAN_IP_WHITELIST` |
+| **Rootcheck watch (X)** | setuid/setgid drift, persistent hidden processes, promiscuous interfaces (OSSEC rootcheck-style) | `ROOTCHECK_WATCH`, `ROOTCHECK_SETUID_WHITELIST`, `ROOTCHECK_PROMISC_WHITELIST` |
 | **Port watch** | listener outside whitelist → auto-block + alert | `PORT_WATCH`, `PORT_WHITELIST`, `AUTO_BLOCK_PORTS` |
 | **SSH key watch** | authorized_keys changed / unknown key → backup + purge | `SSH_WATCH`, `AUTO_PURGE_KEYS` |
 | **Process watch** | miner / reverse-shell / suspicious procs → kill | `PROC_WATCH`, `AUTO_KILL_SUSPICIOUS` |
@@ -58,7 +58,7 @@ L5  Life-loop heartbeat     →  agent↔agent recovery
 
 | File | Function |
 |---|---|
-| `sentinel.sh` | Main sentinel — all pillars (L–X) + security modules (~1426 lines) |
+| `sentinel.sh` | Main sentinel — all pillars (L–X) + security modules (~1450 lines) |
 | `core-vault.sh` | Core vault: RSA-4096 asymmetric backup (owner-gated) |
 | `keep-alive.sh` | Watchdog of watchdogs — keeps crond + cron lines alive |
 | `restart-router.sh` | Revives router service if down |
@@ -101,7 +101,7 @@ Emergency restore:
 ## Requirements
 
 - Linux (tested on Debian/Ubuntu containers)
-- `cron`, `curl`, `sha256sum` (standard)
+- `cron`, `curl`, `sha256sum`, `md5sum` (standard)
 - `python3` (for JSON validation in hunter scans) — must be on PATH for cron jobs
 - Telegram bot token + chat ID for alerts (optional but recommended)
 
