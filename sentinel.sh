@@ -57,7 +57,7 @@ CASCADE_THRESHOLD="${CASCADE_THRESHOLD:-3}"
 STATE_DIR="${SENTINEL_STATE_DIR:-/tmp/hermes-sentinel}"
 # Anti-symlink: STATE_DIR harus real dir (bukan symlink attacker), mode 700
 if [ -L "$STATE_DIR" ] || [ ! -d "$STATE_DIR" ]; then rm -f "$STATE_DIR" 2>/dev/null; fi
-mkdir -p -m 700 "$STATE_DIR" 2>/dev/null
+mkdir -p "$STATE_DIR" 2>/dev/null
 chmod 700 "$STATE_DIR" 2>/dev/null
 LOG_FILE="${SENTINEL_LOG_FILE:-/var/log/sentinel-guard.log}"
 
@@ -845,7 +845,7 @@ gateway_watch() {
     local gw_alive gw_restart
     gw_alive=$(for pid in /proc/[0-9]*; do
         cmd=$(cat "$pid/cmdline" 2>/dev/null | tr '\0' ' ' | head -c 120)
-        echo "$cmd" | grep -q "hermes_cli.main gateway" && echo "$pid"
+        echo "$cmd" | grep -qE "$gw_pat" && echo "$pid"
     done 2>/dev/null | head -1)
     if [ -z "$gw_alive" ]; then
         gw_restart="${GATEWAY_RESTART_SCRIPT:-/root/.hermes/scripts/restart-primary.sh}"
@@ -943,7 +943,7 @@ github_repo_monitor() {
     local auth=""
     [ -n "$ghtoken" ] && auth="Authorization: token $ghtoken"
     for repo in $repos; do
-        local info sha author msg api
+        local info sha author msg
         # Coba atom feed (public). Kalau kosong/404 → API (private).
         info=$(curl -sL --max-time 10 -H "User-Agent: sentinel-guard" ${auth:+-H "$auth"} "https://github.com/$repo/commits/main.atom" 2>/dev/null | head -c 4000)
         if ! echo "$info" | grep -q 'Grit::Commit/'; then
@@ -1225,8 +1225,8 @@ healer_apply() {
     [ "$HEALER_WATCH" != "on" ] && return 0
     local findings_file="$HUNTER_STATE/findings.txt"
     [ -s "$findings_file" ] || return 0
-    local line type sev target
-    while IFS='|' read -r type sev target; do
+    local line type _ target
+    while IFS='|' read -r type _ target; do
         [ -z "$type" ] && continue
         case "$type" in
             deface)  healer_fix_deface "$target" ;;
@@ -1274,7 +1274,8 @@ fim_watch() {
                     printf '%s\n' "$current" > "$baseline" 2>/dev/null
                 elif [ "${FIM_AUTO_RESTORE:-off}" = "on" ]; then
                     # v3.5: restore dari backup kalau tersedia (OSSEC-style)
-                    local bak="$BACKUP_DIR/$(basename "$f").bak"
+                    local bak
+                    bak="$BACKUP_DIR/$(basename "$f").bak"
                     if [ -f "$bak" ]; then
                         cp -f "$bak" "$f" 2>/dev/null && PROBLEMS="${PROBLEMS}♻️ FIM: $f di-restore dari backup\n" || PROBLEMS="${PROBLEMS}🔴 FIM: restore $f GAGAL\n"
                         printf '%s\n' "$current" > "$baseline" 2>/dev/null

@@ -10,7 +10,6 @@
 # ============================================================
 set -u
 LOG="/var/log/sentinel-guard.log"
-NOW=$(date +%s)
 log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" >> "$LOG" 2>/dev/null; }
 
 # --- 1. Crond daemon ---
@@ -18,7 +17,7 @@ CROND_ALIVE=""
 for pid in /proc/[0-9]*; do
     cmd=$(cat "$pid/cmdline" 2>/dev/null | tr '\0' ' ' | head -c 60)
     case "$cmd" in
-        *cron*|*crond*) CROND_ALIVE="yes" ;;
+        *cron*) CROND_ALIVE="yes" ;;
     esac
 done
 if [ -z "$CROND_ALIVE" ]; then
