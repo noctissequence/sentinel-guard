@@ -1,5 +1,7 @@
 # Sentinel Guard — Self-Healing Security Watchdog + Intrusion Detection
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 System-level security watchdog for Linux VPS/containers. Runs WITHOUT an LLM — pure Bash + system cron. Detects intrusions, blocks attacks, auto-heals services, and restores itself if tampered.
 
 > ⚠️ **Scope note:** despite the compact name, this is a full intrusion-detection & hardening system (~1450 lines, 22 security modules), not a minimal 4-script watchdog. See [Modules](#modules) below.
