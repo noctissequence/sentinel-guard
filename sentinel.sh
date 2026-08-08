@@ -678,11 +678,13 @@ if [ "${AUTH_WATCH:-on}" = "on" ]; then
             'BEGIN{IGNORECASE=1} /Failed password|Invalid user|authentication failure/ && $0 >= since {count++} END{print count+0}' "$AUTH_LOG" 2>/dev/null)
         FAILED_THRESHOLD="${FAILED_THRESHOLD:-10}"
         if [ "${FAILED_COUNT:-0}" -ge "$FAILED_THRESHOLD" ]; then
+            if [ "${AUTH_BAN_WATCH:-on}" = "off" ]; then
             PROBLEMS="${PROBLEMS}🚨 BRUTE FORCE DETECTED: ${FAILED_COUNT} failed logins in 15m!\\n"
+            fi
             # Ambil IP penyerang (top attacker)
             TOP_IP=$(grep -E "Failed password|Invalid user" "$AUTH_LOG" 2>/dev/null | tail -200 | \
                 grep -oE "from [0-9.]+" | awk '{print $2}' | sort | uniq -c | sort -rn | head -1 | awk '{print $2}')
-            if [ -n "$TOP_IP" ] && [ "${AUTO_BAN_IP:-on}" = "on" ]; then
+            if [ -n "$TOP_IP" ] && [ "${AUTO_BAN_IP:-on}" = "on" ] && [ "${AUTH_BAN_WATCH:-on}" = "off" ]; then
                 if command -v ufw > /dev/null 2>&1; then
                     ufw deny from "$TOP_IP" 2>/dev/null && PROBLEMS="${PROBLEMS}🛡️ IP ${TOP_IP} AUTO-BANNED\\n"
                 fi
@@ -769,7 +771,7 @@ if [ "${HTTP_WATCH:-on}" = "on" ]; then
             if [ -n "$RESTART_HOOK" ]; then
                 # Anti-injection: tolak hook yang mengandung shell metacharacters
                 case "$RESTART_HOOK" in
-                    *";"*|*"&"*|*"|"*|*"\$(("*|*"\`"*)
+                    *";"*|*"&"*|*"|"*|*"\$("*|*"\`"*)
                         PROBLEMS="${PROBLEMS}🔴 ${svc_name} RESTART_HOOK mencurigakan — di-skip (config ke-tamper?)
 "
                         ;;
@@ -1270,6 +1272,13 @@ fim_watch() {
                 echo "$NOW" > "$last" 2>/dev/null
                 if [ "${FIM_UPDATE_BASELINE:-off}" = "on" ]; then
                     printf '%s\n' "$current" > "$baseline" 2>/dev/null
+                elif [ "${FIM_AUTO_RESTORE:-off}" = "on" ]; then
+                    # v3.5: restore dari backup kalau tersedia (OSSEC-style)
+                    local bak="$BACKUP_DIR/$(basename "$f").bak"
+                    if [ -f "$bak" ]; then
+                        cp -f "$bak" "$f" 2>/dev/null && PROBLEMS="${PROBLEMS}♻️ FIM: $f di-restore dari backup\n" || PROBLEMS="${PROBLEMS}🔴 FIM: restore $f GAGAL\n"
+                        printf '%s\n' "$current" > "$baseline" 2>/dev/null
+                    fi
                 fi
             fi
         fi
@@ -1286,10 +1295,15 @@ fim_watch() {
 auth_ban_watch() {
     [ "${AUTH_BAN_WATCH:-on}" != "on" ] && return 0
     local auth_log="/var/log/auth.log"
-    [ -f "$auth_log" ] || return 0
     local findtime="${BAN_FINDTIME:-600}"
     local maxretry="${BAN_MAXRETRY:-5}"
     local bantime="${BAN_TIME:-3600}"
+    # v3.5: journald fallback — container modern gak selalu punya auth.log
+    if [ ! -f "$auth_log" ] && command -v journalctl >/dev/null 2>&1; then
+        auth_log="$STATE_DIR/auth_journal.txt"
+        journalctl -u ssh -u sshd --since "$findtime seconds ago" --no-pager -o cat 2>/dev/null | grep -iE "Failed password|Invalid user|authentication failure" > "$auth_log" 2>/dev/null
+    fi
+    [ -f "$auth_log" ] || return 0
     local since ban_dir count ip state_file
     ban_dir="$STATE_DIR/auth_ban"
     mkdir -p "$ban_dir" 2>/dev/null
@@ -1298,12 +1312,19 @@ auth_ban_watch() {
         [ -n "$ip" ] || continue
         [ "$count" -lt "$maxretry" ] && continue
         case "$ip" in *[!0-9.]*|"") continue ;; esac
+        # v3.5: IP whitelist (fail2ban ignoreip) — jangan ban diri sendiri/infra
+        case " ${BAN_IP_WHITELIST:-} " in *" $ip "*) continue ;; esac
         state_file="$ban_dir/$ip"
         if [ ! -f "$state_file" ]; then
             echo "$NOW" > "$state_file" 2>/dev/null
-            if command -v ufw >/dev/null 2>&1; then ufw deny from "$ip" 2>/dev/null; fi
-            if command -v iptables >/dev/null 2>&1; then iptables -A INPUT -s "$ip" -j DROP 2>/dev/null; fi
-            PROBLEMS="${PROBLEMS}🚨 AUTH BAN: $ip di-ban (${count} failed login dalam ${findtime}s)\\n"
+            local banned=0
+            if command -v ufw >/dev/null 2>&1; then ufw deny from "$ip" 2>/dev/null && banned=1; fi
+            if command -v iptables >/dev/null 2>&1; then iptables -A INPUT -s "$ip" -j DROP 2>/dev/null && banned=1; fi
+            if [ "$banned" -eq 0 ] && [ ! -f "$ban_dir/.no_firewall" ]; then
+                echo "$NOW" > "$ban_dir/.no_firewall" 2>/dev/null
+                PROBLEMS="${PROBLEMS}⚠️ AUTH BAN: IP $ip butuh di-ban tapi ufw/iptables tidak ada — pasang firewall atau gunakan state manual\n"
+            fi
+            PROBLEMS="${PROBLEMS}🚨 AUTH BAN: $ip di-ban (${count} failed login dalam ${findtime}s)\n"
         fi
     done < <(awk -v s="$since" 'BEGIN{IGNORECASE=1}
         /Failed password|Invalid user|authentication failure/ && $0 >= s {
@@ -1324,12 +1345,6 @@ auth_ban_watch() {
     done
 }
 
-# ============================================================
-# MODULE X: ROOTCHECK WATCH (OSSEC rootcheck-style) — v3.4
-# 3 deteksi: (1) setuid/setgid binary baru (privilege escalation),
-# (2) hidden process persisten (di /proc tapi gak di ps + ada
-# cmdline — rootkit evasion), (3) interface promiscuous (sniffing).
-# ============================================================
 rootcheck_watch() {
     [ "${ROOTCHECK_WATCH:-on}" != "on" ] && return 0
     local wl="${ROOTCHECK_SETUID_WHITELIST:-}"
@@ -1374,6 +1389,8 @@ rootcheck_watch() {
         case "$flags" in 0x*) ;; *) continue ;; esac
         if [ $((flags & 0x40)) -ne 0 ] 2>/dev/null; then
             iname=$(basename "$(dirname "$iface")")
+            # v3.5: whitelist interface (docker bridge dll legit promisc)
+            case " ${ROOTCHECK_PROMISC_WHITELIST:-} " in *" $iname "*) continue ;; esac
             PROBLEMS="${PROBLEMS}🟡 ROOTCHECK: interface $iname PROMISC — kemungkinan sniffing!\\n"
         fi
     done
@@ -1381,6 +1398,7 @@ rootcheck_watch() {
 
 # PILAR v3.0 — eksekusi di main flow (sebelum alert block)
 # ============================================================
+if [ "${SENTINEL_FUNC_TEST:-0}" != "1" ]; then
 rotate_log
 self_integrity
 config_watch
@@ -1429,3 +1447,4 @@ $(echo -e "$PROBLEMS")"
 fi
 
 exit 0
+fi

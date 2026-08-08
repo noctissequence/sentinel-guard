@@ -116,6 +116,9 @@ Copy `config.env.example` → `/etc/sentinel-guard/config.env`. Every module can
 - `LIFE_LOOP_PARTNER` / `SENTINEL_IDENTITY` — heartbeat identities
 - `FIM_FILES` — space-separated critical files for integrity baseline
 - `BAN_MAXRETRY` / `BAN_FINDTIME` / `BAN_TIME` — per-IP auth-ban policy (Fail2ban-style)
+- `BAN_IP_WHITELIST` — IPs never auto-banned (Fail2ban `ignoreip`)
+- `FIM_AUTO_RESTORE` — `on` → restore tampered FIM file from backup (OSSEC-style)
+- `ROOTCHECK_PROMISC_WHITELIST` — interfaces exempt from promiscuous check
 
 > 💡 **Alert-only first:** `AUTO_LOCKDOWN`, `AUTO_BLOCK_PORTS`, `AUTO_PURGE_KEYS`, `AUTO_KILL_SUSPICIOUS`, `AUTO_BAN_IP` are active by default. If you want to observe before acting, set them `off` and keep the watch on.
 
@@ -127,6 +130,14 @@ Copy `config.env.example` → `/etc/sentinel-guard/config.env`. Every module can
 - Logs are rotated; no secrets are written to logs.
 - State dir + lock file hardened against `/tmp` symlink races (mode 700, anti-symlink).
 
+## Testing
+
+```bash
+bash tests/run_tests.sh
+```
+
+Automated suite (no LLM, pure shell) covering: syntax (`bash -n` on every script), secret scrub (0 personal language / token / internal codename / port), anti-injection pattern (`$()` blocked in restart hooks), FIM baseline + tamper detection + restore, auth-ban per-IP counting + whitelist, rootcheck setuid drift, and `/tmp` race hardening. All tests use an isolated temp state dir — safe to run on a live host.
+
 ## Status
 
-v3.4 (2026-08-08) — production-tested on container VPS. Modules: L,M,N,O,P,R,S,T,U + FIM (V), AuthBan (W), Rootcheck (X) + v2.0–v2.6 security modules. Design patterns borrowed from OSSEC / Wazuh / Fail2ban (all GPL — concepts reimplemented from scratch, no copied code).
+v3.5 (2026-08-08) — production-tested on container VPS. Modules: L,M,N,O,P,R,S,T,U + FIM (V), AuthBan (W), Rootcheck (X) + v2.0–v2.6 security modules. Design patterns borrowed from OSSEC / Wazuh / Fail2ban (all GPL — concepts reimplemented from scratch, no copied code). Hardened: anti-command-injection on restart hooks, `/tmp` symlink-race protection, journald auth-log fallback, IP whitelist + firewall-missing alert on auth-ban, FIM auto-restore, promiscuous-interface whitelist. 17/17 automated tests pass.
