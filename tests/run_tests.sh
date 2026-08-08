@@ -154,6 +154,18 @@ else
 fi
 
 # ============================================================
+t_start "8. Gateway pattern ERE (bukan glob — glob gak match di grep -E)"
+# ============================================================
+# regression: gw_pat pernah glob (*hermes*gateway*) -> false GATEWAY PRIMARY DOWN tiap run
+PAT=$(grep -oE 'GATEWAY_PROC_PATTERN:-\?[^}]*' "$SCRIPT" | head -1 | sed 's/GATEWAY_PROC_PATTERN:-//; s/"//g')
+if echo "/usr/local/lib/hermes-agent/venv/bin/python /usr/local/lib/hermes-agent/hermes gateway run" | grep -qE "$PAT" && \
+   echo "/usr/local/lib/hermes-agent/venv/bin/python -m hermes_cli.main gateway run" | grep -qE "$PAT"; then
+    t_pass "gateway ERE pattern match primary + secondary"
+else
+    t_fail "gateway pattern TIDAK match (glob-sebagai-ERE?) — pattern: $PAT"
+fi
+
+# ============================================================
 echo ""
 echo "═══════════════════════════════════"
 echo "RESULT: $PASS passed, $FAIL failed"

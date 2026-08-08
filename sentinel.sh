@@ -841,7 +841,7 @@ auto_sync_backups() {
 # Sentinel di-system cron tetap jalan walau gateway mati -> detect + restart.
 # ============================================================
 gateway_watch() {
-    local gw_pat="${GATEWAY_PROC_PATTERN:-*hermes*gateway*run*|*hermes_cli.main*gateway*}"
+    local gw_pat="${GATEWAY_PROC_PATTERN:-hermes.*gateway.*run|hermes_cli\.main.*gateway}"
     local gw_alive gw_restart
     gw_alive=$(for pid in /proc/[0-9]*; do
         cmd=$(cat "$pid/cmdline" 2>/dev/null | tr '\0' ' ' | head -c 120)
