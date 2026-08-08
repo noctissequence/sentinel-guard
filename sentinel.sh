@@ -43,6 +43,8 @@ fi
 
 # --- locking ---
 LOCK_FILE="${SENTINEL_LOCK_FILE:-/tmp/sentinel-guard.lock}"
+# Anti-symlink: cegah /tmp race pada lock file
+if [ -L "$LOCK_FILE" ]; then rm -f "$LOCK_FILE" 2>/dev/null; fi
 exec 9>"$LOCK_FILE"
 if ! flock -n 9; then
     exit 0
@@ -53,7 +55,10 @@ CRASH_THRESHOLD="${CRASH_THRESHOLD:-3}"
 CRASH_WINDOW_SEC="${CRASH_WINDOW_SEC:-600}"
 CASCADE_THRESHOLD="${CASCADE_THRESHOLD:-3}"
 STATE_DIR="${SENTINEL_STATE_DIR:-/tmp/hermes-sentinel}"
-mkdir -p "$STATE_DIR"
+# Anti-symlink: STATE_DIR harus real dir (bukan symlink attacker), mode 700
+if [ -L "$STATE_DIR" ] || [ ! -d "$STATE_DIR" ]; then rm -f "$STATE_DIR" 2>/dev/null; fi
+mkdir -p -m 700 "$STATE_DIR" 2>/dev/null
+chmod 700 "$STATE_DIR" 2>/dev/null
 LOG_FILE="${SENTINEL_LOG_FILE:-/var/log/sentinel-guard.log}"
 
 # --- v3.0 PHOENIX dirs ---
