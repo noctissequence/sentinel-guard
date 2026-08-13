@@ -1127,10 +1127,22 @@ hunter_token_scan() {
             HUNTER_FINDINGS="${HUNTER_FINDINGS}token|high|telegram bot token invalid\n"
         fi
     fi
-    if [ -f /root/.git-credentials ]; then
-        gh_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 8 https://api.github.com/rate_limit 2>/dev/null)
-        if [ "$gh_code" = "401" ]; then
-            HUNTER_FINDINGS="${HUNTER_FINDINGS}token|high|github token invalid\n"
+    if [ -f "$HOME/.git-credentials" ]; then
+        # Token GitHub untuk private repo — ekstrak sama kayak github_repo_monitor
+        local ghtoken="${GITHUB_TOKEN:-}"
+        if [ -z "$ghtoken" ] && [ -f "$HOME/.git-credentials" ]; then
+            ghtoken=$(grep 'github.com' "$HOME/.git-credentials" 2>/dev/null | sed 's|https://||;s|@github.com||' | cut -d: -f2)
+        fi
+        if [ -n "$ghtoken" ]; then
+            gh_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 8 -H "Authorization: token $ghtoken" https://api.github.com/rate_limit 2>/dev/null)
+            if [ "$gh_code" = "401" ]; then
+                HUNTER_FINDINGS="${HUNTER_FINDINGS}token|high|github token invalid\\n"
+            elif [ "$gh_code" = "000" ]; then
+                HUNTER_FINDINGS="${HUNTER_FINDINGS}token|medium|github API unreachable (network)\\n"
+            fi
+        else
+            # File ada tapi kosong/tanpa github.com entry — token HILANG (kasus 2026-08-13)
+            HUNTER_FINDINGS="${HUNTER_FINDINGS}token|high|github token MISSING (git-credentials kosong)\\n"
         fi
     fi
     hunter_log "token scan selesai"
