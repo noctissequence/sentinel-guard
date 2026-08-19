@@ -965,7 +965,7 @@ github_repo_monitor() {
             msg=$(echo "$info" | grep -m1 '"message"' | sed 's/.*"message": *"\([^"]*\)".*/\1/' | head -c 100)
         else
             sha=$(echo "$info" | grep -m1 'Grit::Commit/' | sed 's/.*Grit::Commit\/\([a-f0-9]\{40\}\).*/\1/' 2>/dev/null)
-            author=$(echo "$info" | grep -m2 '<name>' | tail -1 | sed 's/<[^>]*>//g' | tr -d ' \n' 2>/dev/null)
+            author=$(echo "$info" | grep -o '<name>[^<]*</name>' | sed 's/<[^>]*>//g' | tr -d ' \n' | grep -v '^$' | head -1 2>/dev/null)
             msg=$(echo "$info" | grep -m1 '<title>' | sed 's/<[^>]*>//g' | head -c 100)
         fi
         local prev=""
