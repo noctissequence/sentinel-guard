@@ -66,6 +66,23 @@ if [ -L "$STATE_DIR" ] || [ ! -d "$STATE_DIR" ]; then rm -f "$STATE_DIR" 2>/dev/
 mkdir -p "$STATE_DIR" 2>/dev/null
 chmod 700 "$STATE_DIR" 2>/dev/null
 LOG_FILE="${SENTINEL_LOG_FILE:-/var/log/sentinel-guard.log}"
+# --- MODE: alert-only (aman) vs auto-response (agresif) ---
+# [FRESH-INSTALL] Default = alert. User pilih mode via SENTINEL_MODE di config.env.
+SENTINEL_MODE="${SENTINEL_MODE:-alert}"
+MODE_ACK="$STATE_DIR/.mode_ack"
+if [ "$SENTINEL_MODE" = "auto" ]; then
+    :
+elif [ "$SENTINEL_MODE" = "alert" ] && [ ! -f "$MODE_ACK" ]; then
+    if [ -n "${TELEGRAM_BOT_TOKEN:-}" ] && [ -n "${TELEGRAM_CHAT_ID:-}" ]; then
+        curl -s -m 8 -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d "chat_id=${TELEGRAM_CHAT_ID}" \
+            -d "text=Sentinel MODE=ALERT-ONLY (default). Set SENTINEL_MODE=auto utk auto-response." \
+            >/dev/null 2>&1
+    fi
+    echo "sentinel: MODE=alert-only (first-run). Set SENTINEL_MODE=auto utk auto-response." >> "$LOG_FILE" 2>/dev/null
+    touch "$MODE_ACK" 2>/dev/null
+fi
+
 
 # --- v3.0 PHOENIX dirs ---
 SENTINEL_DIR="/etc/sentinel-guard"
@@ -406,7 +423,7 @@ if [ "${PORT_WATCH:-on}" = "on" ]; then
                 if [ -n "$NEW_BIND" ]; then
                     PROBLEMS="${PROBLEMS}🚨 NEW PORT ${p} exposed on ALL interfaces!\\n"
                     PORT_LOCKDOWN=true
-                    if [ "${AUTO_BLOCK_PORTS:-on}" = "on" ] && command -v ufw > /dev/null 2>&1; then
+                    if [ "${AUTO_BLOCK_PORTS:-off}" = "on" ] && command -v ufw > /dev/null 2>&1; then
                         ufw deny "$p"/tcp > /dev/null 2>&1 && PROBLEMS="${PROBLEMS}🛡️ Port ${p} AUTO-BLOCKED via UFW\\n"
                     fi
                 fi
@@ -453,7 +470,7 @@ if [ "${SSH_WATCH:-on}" = "on" ]; then
             done < "$AK"
             if [ -s "$FOREIGN" ]; then
                 PROBLEMS="${PROBLEMS}🚨 authorized_keys BERUBAH — key ASING terdeteksi! Backup → ${STATE_DIR}/...\\n"
-                if [ "${AUTO_PURGE_KEYS:-on}" = "on" ]; then
+                if [ "${AUTO_PURGE_KEYS:-off}" = "on" ]; then
                     # Tulis ulang: hanya key yang ada di baseline (key pemilik)
                     grep -Fx -f "$AK_BASELINE" "$AK" > "$AK.tmp" 2>/dev/null || : > "$AK.tmp"
                     mv "$AK.tmp" "$AK"
@@ -494,7 +511,7 @@ if [ "${PROC_WATCH:-on}" = "on" ]; then
     done)
     if [ -n "$SUSPICIOUS" ]; then
         PROBLEMS="${PROBLEMS}🚨 PROSES MEN CURIGAKAN:\\n$SUSPICIOUS\\n"
-        if [ "${AUTO_KILL_SUSPICIOUS:-on}" = "on" ]; then
+        if [ "${AUTO_KILL_SUSPICIOUS:-off}" = "on" ]; then
             for pid in /proc/[0-9]*; do
                 cmd=$(cat "$pid/cmdline" 2>/dev/null | tr '\0' ' ' | head -c 200)
                 case "$cmd" in
@@ -519,7 +536,7 @@ if [ "${CRON_WATCH:-on}" = "on" ]; then
         # CRON berubah — bedakan: legit owner vs asing (smart revert per-bar).
         # JANGAN revert seluruh crontab ke baseline (boomerang: cron legit
         # owner kayak obsidian/webapp ikut hilang).
-        if [ "${AUTO_REVERT_CRON:-on}" = "on" ] && [ -f "$STATE_DIR/cron.baseline" ]; then
+        if [ "${AUTO_REVERT_CRON:-off}" = "on" ] && [ -f "$STATE_DIR/cron.baseline" ]; then
             # Baseline kosong? Ambil sekarang (setup awal)
             if [ ! -s "$STATE_DIR/cron.baseline" ]; then
                 crontab -l 2>/dev/null > "$STATE_DIR/cron.baseline"
@@ -606,7 +623,7 @@ fi
 # Walaupun attacker pegang SSH key, kalau port 22 juga diblock dia
 # tetap nggak bisa masuk — ini "nggak bisa akses apa pun".
 # ============================================================
-if [ "$PORT_LOCKDOWN" = "true" ] && [ "${AUTO_LOCKDOWN:-on}" = "on" ]; then
+if [ "$PORT_LOCKDOWN" = "true" ] && [ "${AUTO_LOCKDOWN:-off}" = "on" ]; then
     if command -v ufw > /dev/null 2>&1; then
         # Simpan state sebelum lockdown biar bisa dipulihkan manual
         ufw status numbered > "$STATE_DIR/ufw_before_lockdown.txt" 2>/dev/null
@@ -690,7 +707,7 @@ if [ "${AUTH_WATCH:-on}" = "on" ]; then
             # Ambil IP penyerang (top attacker)
             TOP_IP=$(grep -E "Failed password|Invalid user" "$AUTH_LOG" 2>/dev/null | tail -200 | \
                 grep -oE "from [0-9.]+" | awk '{print $2}' | sort | uniq -c | sort -rn | head -1 | awk '{print $2}')
-            if [ -n "$TOP_IP" ] && [ "${AUTO_BAN_IP:-on}" = "on" ] && [ "${AUTH_BAN_WATCH:-on}" = "off" ]; then
+            if [ -n "$TOP_IP" ] && [ "${AUTO_BAN_IP:-off}" = "on" ] && [ "${AUTH_BAN_WATCH:-on}" = "off" ]; then
                 if command -v ufw > /dev/null 2>&1; then
                     ufw deny from "$TOP_IP" 2>/dev/null && PROBLEMS="${PROBLEMS}🛡️ IP ${TOP_IP} AUTO-BANNED\\n"
                 fi
