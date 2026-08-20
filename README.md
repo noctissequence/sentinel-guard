@@ -48,7 +48,7 @@ L5  Life-loop heartbeat     →  agent↔agent recovery
 | **Rootcheck watch (X)** | setuid/setgid drift, persistent hidden processes, promiscuous interfaces (OSSEC rootcheck-style) | `ROOTCHECK_WATCH`, `ROOTCHECK_SETUID_WHITELIST`, `ROOTCHECK_PROMISC_WHITELIST` |
 | **Port watch** | listener outside whitelist → auto-block + alert | `PORT_WATCH`, `PORT_WHITELIST`, `AUTO_BLOCK_PORTS` |
 | **SSH key watch** | authorized_keys changed / unknown key → backup + purge | `SSH_WATCH`, `AUTO_PURGE_KEYS` |
-| **Process watch** | miner / reverse-shell / suspicious procs → kill | `PROC_WATCH`, `AUTO_KILL_SUSPICIOUS` |
+| **Process watch** | miner / reverse-shell / suspicious procs → `AUTO_KILL_SUSPICIOUS=on` (mode auto): kill miner; alert-only di mode alert | `PROC_WATCH`, `AUTO_KILL_SUSPICIOUS` |
 | **Cron watch** | cron modified/added by attacker → revert to baseline | `CRON_WATCH` |
 | **File watch** | tripwire on .bashrc/.profile/authorized_keys | `FILE_WATCH`, `TRIPWIRE_FILES` |
 | **Immutable watch** | chattr +i on critical files | `IMMUTABLE_WATCH`, `IMMUTABLE_FILES` |
@@ -122,7 +122,29 @@ Copy `config.env.example` → `/etc/sentinel-guard/config.env`. Every module can
 - `FIM_AUTO_RESTORE` — `on` → restore tampered FIM file from backup (OSSEC-style)
 - `ROOTCHECK_PROMISC_WHITELIST` — interfaces exempt from promiscuous check
 
-> 💡 **Alert-only first:** `AUTO_LOCKDOWN`, `AUTO_BLOCK_PORTS`, `AUTO_PURGE_KEYS`, `AUTO_KILL_SUSPICIOUS`, `AUTO_BAN_IP` are active by default. If you want to observe before acting, set them `off` and keep the watch on.
+> 💡 **Mode default = ALERT-ONLY (aman).** `SENTINEL_MODE` (default `alert`) mengontrol: di mode `alert`, Sentinel mendeteksi + alert TAPI tidak auto-eksekusi aksi destruktif. Di mode `auto`, `AUTO_*` di bawah aktif sesuai nilainya.
+>
+> **Fresh-install default: semua `AUTO_*` = off.** `AUTO_LOCKDOWN`, `AUTO_BLOCK_PORTS`, `AUTO_PURGE_KEYS`, `AUTO_KILL_SUSPICIOUS`, `AUTO_BAN_IP`, `AUTO_REVERT_CRON` semuanya nont-active (alert-only) sampai user nyalakan SATU PER SATU. Alasan: aksi auto bisa boomerang (contoh `AUTO_PURGE_KEYS` hapus SSH key → lockout kalau whitelist kosong; `AUTO_REVERT_CRON` revert crontab → bisa hapus cron legit). Aktifkan setelah paham perilakunya.
+>
+> ⚠️ **Runtime Boss (produksi) menggunakan `SENTINEL_MODE=auto`** + `AUTO_*=on` eksplisit untuk proteksi penuh. Hanya fresh install / pengguna yang belum customize yang default-nya aman (alert-only).
+>
+> **First-run wizard:** saat config masih virgin (`SENTINEL_MODE` belum di-set + belum pernah pilih), Sentinel kirim notice 1x (Telegram + log) meminta user memilih mode eksplisit, lalu `touch $STATE_DIR/.mode_ack`. Set `SENTINEL_MODE=auto` di config.env untuk auto-response (intensional).
+
+## Mode konfigurasi
+
+```bash
+# config.env
+SENTINEL_MODE=alert   # atau auto  (default: alert, aman)
+# Auto-response hanya kalau SENTINEL_MODE=auto DAN AUTO_*=on:
+AUTO_KILL_SUSPICIOUS=off   # miner/reverse-shell kill (mode auto: on)
+AUTO_BAN_IP=off            # auto-ban IP brute-force
+AUTO_BLOCK_PORTS=off       # auto-block port anomali
+AUTO_LOCKDOWN=off          # firewall lockdown
+AUTO_PURGE_KEYS=off        # purge SSH key asing (lockout risk)
+AUTO_REVERT_CRON=off       # revert cron jahat (boomerang risk)
+```
+
+**Referensi lengkap var ada di `config.env.example`** (dengan komentar per-var + kenapa default-nya off).
 
 ## Security
 
@@ -142,4 +164,8 @@ Automated suite (no LLM, pure shell) covering: syntax (`bash -n` on every script
 
 ## Status
 
-v3.5 (2026-08-08) — production-tested on container VPS. Modules: L,M,N,O,P,R,S,T,U + FIM (V), AuthBan (W), Rootcheck (X) + v2.0–v2.6 security modules. Design patterns borrowed from OSSEC / Wazuh / Fail2ban (all GPL — concepts reimplemented from scratch, no copied code). Hardened: anti-command-injection on restart hooks, `/tmp` symlink-race protection, journald auth-log fallback, IP whitelist + firewall-missing alert on auth-ban, FIM auto-restore, promiscuous-interface whitelist, hermetic test runner (source-safe exit guards). 18/18 automated tests pass.
+**v3.8 (2026-08-20)** — Fresh-install MODE (alert-only default). `SENTINEL_MODE` (`alert`|`auto`); flip 6 `AUTO_*` destructif default `on→off` (anti-lockout/boomerang); first-run wizard notice 1x; config.env.example jadi packaged default aman. **Runtime Boss (v3.7+) tetap `SENTINEL_MODE=auto`** + `AUTO_*=on` untuk proteksi penuh produksi.
+
+**v3.7 (2026-08-20)** — Cryptominer upgrade: disk+persist detection (`hunter_miner_file_scan`, `hunter_persist_scan`) + supply-chain postinstall/pipe-to-shell scan (`hunter_package_scan`, type `supplychain`) + auto-quarantine. Regex PCRE (`grep -qP`) fix. 0 false-positive di package legit.
+
+**v3.5 (2026-08-08)** — production-tested on container VPS. Modules: L,M,N,O,P,R,S,T,U + FIM (V), AuthBan (W), Rootcheck (X) + v2.0–v2.6 security modules. Design patterns borrowed from OSSEC / Wazuh / Fail2ban (all GPL — concepts reimplemented from scratch, no copied code). Hardened: anti-command-injection on restart hooks, `/tmp` symlink-race protection, journald auth-log fallback, IP whitelist + firewall-missing alert on auth-ban, FIM auto-restore, promiscuous-interface whitelist, hermetic test runner (source-safe exit guards). 18/18 automated tests pass.
