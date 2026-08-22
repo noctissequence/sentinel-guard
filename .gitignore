@@ -1,2 +1,6 @@
 config.env
 *.env
+# canary seed files (dibuat via --init, jangan commit volume umpan)
+canary/.env.backup
+canary/config_old.yaml
+canary/canary_credentials.json
